@@ -12,7 +12,7 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:label="Mauli Auto Parts"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.Mauli">
 
         <activity
             android:name=".MainActivity"
