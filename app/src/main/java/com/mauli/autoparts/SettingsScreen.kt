@@ -28,12 +28,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FileUpload
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.SettingsBackupRestore
 import androidx.compose.material.icons.rounded.Store
 import androidx.compose.material3.AlertDialog
@@ -44,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +59,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,6 +67,7 @@ import java.util.Locale
 @Composable
 fun SettingsScreen(vm: AppViewModel) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val s = vm.settings
     var showPrinters by remember { mutableStateOf(false) }
     var askRestore by remember { mutableStateOf(false) }
@@ -82,7 +86,15 @@ fun SettingsScreen(vm: AppViewModel) {
         if (uri != null) vm.backup(uri)
     }
     val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.restore(uri)
+        if (uri != null) {
+            scope.launch {
+                try {
+                    vm.toast(DriveBackup.restoreFromUri(context, vm, uri))
+                } catch (e: Exception) {
+                    vm.toast("Restore failed: ${e.message}")
+                }
+            }
+        }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importCsv(uri)
@@ -120,6 +132,9 @@ fun SettingsScreen(vm: AppViewModel) {
                     }
                 }
             }
+            Spacer(Modifier.height(14.dp))
+
+            DriveBackupCard(vm)
             Spacer(Modifier.height(14.dp))
 
             SettingsCard("Shop details", "Printed on every bill", Icons.Rounded.Store, Navy) {
@@ -206,11 +221,11 @@ fun SettingsScreen(vm: AppViewModel) {
             }
             Spacer(Modifier.height(14.dp))
 
-            SettingsCard("Backup & data", "Keep your shop data safe", Icons.Rounded.CloudUpload, Teal) {
-                MenuRow(Icons.Rounded.CloudUpload, Teal, "Backup all data", "Save to Google Drive, WhatsApp or phone") {
+            SettingsCard("Backup file & Excel", "For USB, laptop or manual copies", Icons.Rounded.Folder, Teal) {
+                MenuRow(Icons.Rounded.Save, Teal, "Save backup file", "Save all data as one file on phone or Drive") {
                     backupLauncher.launch("Mauli_Backup_$today.json")
                 }
-                MenuRow(Icons.Rounded.SettingsBackupRestore, Navy, "Restore from backup", "Bring back data from a backup file") {
+                MenuRow(Icons.Rounded.SettingsBackupRestore, Navy, "Restore from backup file", "Works with phone and Google Drive backup files") {
                     askRestore = true
                 }
                 MenuRow(Icons.Rounded.FileUpload, Green, "Import stock from Excel (CSV)", "Add or update many parts at once") {
@@ -219,12 +234,6 @@ fun SettingsScreen(vm: AppViewModel) {
                 MenuRow(Icons.Rounded.FileDownload, Purple, "Export stock to Excel (CSV)", "Full stock list with prices") {
                     exportLauncher.launch("Mauli_Stock_$today.csv")
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Tip: take a backup every week and keep it in Google Drive. If the phone is lost or changed, " +
-                        "Restore brings back all parts, bills and settings.",
-                    color = Muted, fontSize = 12.5.sp
-                )
             }
             Spacer(Modifier.height(14.dp))
 
@@ -236,7 +245,7 @@ fun SettingsScreen(vm: AppViewModel) {
             }
             Spacer(Modifier.height(20.dp))
             Text(
-                "Works 100% offline  •  Your data stays on this phone",
+                "Billing works 100% offline  •  Your data stays on this phone",
                 Modifier.fillMaxWidth(), color = Faint, fontSize = 12.sp, textAlign = TextAlign.Center
             )
         }
