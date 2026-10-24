@@ -1,0 +1,2 @@
+-keep class com.mauli.autoparts.** { *; }
+-ignorewarnings
