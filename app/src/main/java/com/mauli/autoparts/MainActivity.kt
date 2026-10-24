@@ -20,7 +20,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,7 +40,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Inventory2
@@ -98,7 +96,7 @@ fun MauliApp(vm: AppViewModel) {
     var splash by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(Unit) {
         if (splash) {
-            delay(1200)
+            delay(1900)
             splash = false
         }
     }
@@ -106,7 +104,7 @@ fun MauliApp(vm: AppViewModel) {
         Box(Modifier.fillMaxSize()) {
             AppBody(vm)
             AnimatedVisibility(visible = splash, enter = fadeIn(), exit = fadeOut(tween(450))) {
-                Splash(vm.settings.shopName, vm.settings.tagline)
+                BrandSplash(vm.settings.shopName.ifBlank { "Mauli Auto Parts" }, vm.settings.tagline)
             }
         }
     }
@@ -261,71 +259,6 @@ private fun RowScope.BillButton(selected: Boolean, count: Int, onClick: () -> Un
             fontSize = 11.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1
-        )
-    }
-}
-
-/** 1-second branded opening screen with the shop's name. */
-@Composable
-private fun Splash(shopName: String, tagline: String) {
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val logoScale by animateFloatAsState(
-        targetValue = if (shown) 1f else 0.5f,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessLow),
-        label = "logoScale"
-    )
-    val textAlpha by animateFloatAsState(
-        targetValue = if (shown) 1f else 0f,
-        animationSpec = tween(700, delayMillis = 150),
-        label = "textAlpha"
-    )
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(HeaderBrush)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(
-                Modifier
-                    .scale(logoScale)
-                    .size(112.dp)
-                    .shadow(20.dp, CircleShape, ambientColor = Orange, spotColor = Orange)
-                    .clip(CircleShape)
-                    .background(OrangeBrush)
-                    .border(4.dp, Color.White.copy(alpha = 0.9f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Rounded.Build, null, tint = Color.White, modifier = Modifier.size(54.dp))
-            }
-            Spacer(Modifier.height(28.dp))
-            Text(
-                shopName.ifBlank { "Mauli Auto Parts" },
-                color = Color.White.copy(alpha = textAlpha),
-                fontSize = 30.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
-            if (tagline.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    tagline,
-                    color = Color.White.copy(alpha = textAlpha * 0.75f),
-                    fontSize = 14.sp,
-                    letterSpacing = 0.5.sp
-                )
-            }
-        }
-        Text(
-            "Billing  •  Stock  •  Udhaar",
-            Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 28.dp),
-            color = Color.White.copy(alpha = textAlpha * 0.55f),
-            fontSize = 12.sp,
-            letterSpacing = 1.sp
         )
     }
 }
