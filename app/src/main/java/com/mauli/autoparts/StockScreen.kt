@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.FileDownload
@@ -42,7 +44,6 @@ import androidx.compose.material.icons.rounded.FlashOn
 import androidx.compose.material.icons.rounded.LocalShipping
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Opacity
-import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.RadioButtonChecked
 import androidx.compose.material.icons.rounded.Receipt
 import androidx.compose.material.icons.rounded.Search
@@ -123,6 +124,7 @@ fun StockScreen(vm: AppViewModel) {
     var stockFor by remember { mutableStateOf<Part?>(null) }
     val listState = rememberLazyListState()
     val draft = vm.draft
+    val reserved = vm.reserved()
 
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importCsv(uri)
@@ -163,10 +165,19 @@ fun StockScreen(vm: AppViewModel) {
             title = "Stock",
             subtitle = "${parts.size} parts  •  Value ${rs(value)}",
             actions = {
+                HeaderAction(Icons.Rounded.LocalShipping, "Purchases") { vm.open(Screen.Purchases) }
                 HeaderAction(Icons.Rounded.Add, "Add part") { vm.open(Screen.EditPart(0)) }
                 Box {
                     HeaderAction(Icons.Rounded.MoreVert, "More") { menu = true }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Record purchase (stock in)") },
+                            leadingIcon = { Icon(Icons.Rounded.LocalShipping, null, tint = Teal) },
+                            onClick = {
+                                menu = false
+                                vm.open(Screen.PurchaseEdit(0))
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Import from Excel") },
                             leadingIcon = { Icon(Icons.Rounded.FileUpload, null, tint = Green) },
@@ -185,7 +196,7 @@ fun StockScreen(vm: AppViewModel) {
                         )
                         DropdownMenuItem(
                             text = { Text("Send order list") },
-                            leadingIcon = { Icon(Icons.Rounded.LocalShipping, null, tint = Purple) },
+                            leadingIcon = { Icon(Icons.Rounded.Receipt, null, tint = Purple) },
                             onClick = {
                                 menu = false
                                 if (parts.none { it.qty <= it.minQty }) vm.toast("No parts are running low 👍")
@@ -233,10 +244,14 @@ fun StockScreen(vm: AppViewModel) {
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    item(key = "purchase") {
+                        PurchaseBanner { vm.open(Screen.PurchaseEdit(0)) }
+                    }
                     items(shown, key = { it.id }) { p ->
                         PartCard(
                             p = p,
                             inBill = inBill[p.id] ?: 0,
+                            reserved = reserved[p.id] ?: 0,
                             onOpen = { vm.open(Screen.EditPart(p.id)) },
                             onStock = { stockFor = p },
                             onBill = {
@@ -267,11 +282,13 @@ fun StockScreen(vm: AppViewModel) {
     }
 }
 
-/** Quick "stock received" box: quantity + optional new buy price. */
+/** Quick "stock received" box. With a vendor name it is saved as a purchase (vendor history). */
 @Composable
 fun AddStockDialog(vm: AppViewModel, p: Part, onDismiss: () -> Unit) {
+    val purchases by vm.purchases.collectAsState()
     var qty by remember { mutableStateOf("") }
-    var buy by remember { mutableStateOf("") }
+    var rate by remember { mutableStateOf(if (p.buyPrice > 0) num(p.buyPrice) else "") }
+    var vendor by remember { mutableStateOf(p.supplier) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         delay(200)
@@ -279,6 +296,9 @@ fun AddStockDialog(vm: AppViewModel, p: Part, onDismiss: () -> Unit) {
             focus.requestFocus()
         } catch (e: Exception) {
         }
+    }
+    val vendors = remember(purchases) {
+        purchases.map { it.customer.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }.take(8)
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -290,19 +310,27 @@ fun AddStockDialog(vm: AppViewModel, p: Part, onDismiss: () -> Unit) {
                 Text(p.name, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text("Now in stock: ${p.qty} ${p.unit}", color = Muted, fontSize = 13.sp)
                 Spacer(Modifier.height(14.dp))
-                AppField(
-                    qty, { qty = it.filter { c -> c.isDigit() }.take(6) }, "Quantity received",
-                    Modifier.focusRequester(focus), type = KeyboardType.Number
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AppField(
+                        qty, { qty = it.filter { c -> c.isDigit() }.take(6) }, "Qty received",
+                        Modifier.weight(1f).focusRequester(focus), type = KeyboardType.Number
+                    )
+                    AppField(
+                        rate, { rate = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Buy rate",
+                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ "
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
-                AppField(
-                    buy, { buy = it.filter { c -> c.isDigit() || c == '.' } }, "New buy price (optional)",
-                    type = KeyboardType.Decimal, prefix = "₹ ", imeAction = ImeAction.Done
-                )
+                AppField(vendor, { vendor = it }, "Vendor / supplier", imeAction = ImeAction.Done)
+                PickChips(vendors.filter { !it.equals(vendor.trim(), true) }) { vendor = it }
                 val q = qty.toIntOrNull() ?: 0
                 if (q > 0) {
                     Spacer(Modifier.height(10.dp))
                     Text("Stock will become ${p.qty + q} ${p.unit}", color = Green, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+                if (vendor.isBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Add the vendor name to keep a purchase record.", color = Faint, fontSize = 12.sp)
                 }
             }
         },
@@ -310,10 +338,29 @@ fun AddStockDialog(vm: AppViewModel, p: Part, onDismiss: () -> Unit) {
             Button(
                 onClick = {
                     val q = qty.toIntOrNull() ?: 0
-                    if (q > 0) {
-                        vm.addStock(p, q, buy.toNum().takeIf { it > 0 })
+                    val r = rate.toNum()
+                    if (q <= 0) {
+                        vm.toast("Enter quantity")
+                    } else {
+                        if (vendor.isNotBlank()) {
+                            vm.savePurchase(
+                                0L,
+                                PurchaseInput(
+                                    vendor = vendor.trim(), phone = "", ref = "", date = now(),
+                                    lines = listOf(
+                                        BillItem(
+                                            id = System.nanoTime(), partId = p.id, name = p.name, partNo = p.partNo,
+                                            qty = q, price = r, buyPrice = r, gst = p.gst
+                                        )
+                                    ),
+                                    discount = 0.0, paid = q * r, payMode = "Cash", note = ""
+                                )
+                            ) { }
+                        } else {
+                            vm.addStock(p, q, r.takeIf { it > 0 })
+                        }
                         onDismiss()
-                    } else vm.toast("Enter quantity")
+                    }
                 },
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Navy)
@@ -324,15 +371,43 @@ fun AddStockDialog(vm: AppViewModel, p: Part, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun PartCard(p: Part, inBill: Int, onOpen: () -> Unit, onStock: () -> Unit, onBill: () -> Unit) {
-    val color = stockColor(p)
+private fun PurchaseBanner(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Teal.copy(alpha = 0.08f))
+            .border(1.dp, Teal.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconBadge(Icons.Rounded.LocalShipping, Teal, 38.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Record a purchase", color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+            Text("New stock from a vendor: parts, qty, rate. Stock goes up automatically.", color = Muted, fontSize = 12.sp)
+        }
+        Icon(Icons.Rounded.ChevronRight, null, tint = Teal)
+    }
+}
+
+@Composable
+private fun PartCard(p: Part, inBill: Int, reserved: Int, onOpen: () -> Unit, onStock: () -> Unit, onBill: () -> Unit) {
+    val avail = p.qty - reserved
+    val color = when {
+        avail <= 0 -> Red
+        avail <= p.minQty -> Amber
+        else -> Green
+    }
     AppCard(Modifier.fillMaxWidth(), onClick = onOpen, padding = 12.dp) {
         Row {
             IconBadge(categoryIcon(p.category), tagColor(p.category), 46.dp)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(p.name, color = Ink, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val info = listOf(p.partNo, p.brand, p.vehicle).filter { it.isNotBlank() }.joinToString("  •  ")
+                val info = listOf(p.partNo, p.brand, p.vehicle, if (p.rack.isNotBlank()) "Rack ${p.rack}" else "")
+                    .filter { it.isNotBlank() }.joinToString("  •  ")
                 if (info.isNotEmpty()) {
                     Text(info, color = Muted, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -349,27 +424,26 @@ private fun PartCard(p: Part, inBill: Int, onOpen: () -> Unit, onStock: () -> Un
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(color))
             Spacer(Modifier.width(6.dp))
-            Text(
-                when {
-                    p.qty <= 0 -> "Out of stock"
-                    p.qty <= p.minQty -> "Low • ${p.qty} ${p.unit}"
-                    else -> "${p.qty} ${p.unit}"
-                },
-                color = color, fontSize = 12.5.sp, fontWeight = FontWeight.Bold
-            )
-            if (p.rack.isNotBlank()) {
-                Spacer(Modifier.width(8.dp))
-                Icon(Icons.Rounded.Place, null, tint = Faint, modifier = Modifier.size(14.dp))
-                Text(p.rack, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    when {
+                        avail <= 0 -> "Out of stock"
+                        avail <= p.minQty -> "Low • $avail ${p.unit}"
+                        else -> "$avail ${p.unit} in stock"
+                    },
+                    color = color, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1
+                )
+                if (reserved > 0) {
+                    Text("$reserved in open bill • ${p.qty} on shelf", color = Orange, fontSize = 11.sp, maxLines = 1)
+                }
             }
-            Spacer(Modifier.weight(1f))
             SmallBtn(Icons.Rounded.AddBox, "Stock", Navy, NavySoft, onStock)
             Spacer(Modifier.width(8.dp))
             SmallBtn(
                 Icons.Rounded.AddShoppingCart,
                 if (inBill > 0) "Bill ($inBill)" else "Bill",
                 Color.White,
-                if (p.qty > 0) Orange else Faint,
+                if (avail > 0) Orange else Faint,
                 onBill
             )
         }
@@ -488,10 +562,14 @@ private fun shareSample(context: Context) {
         val file = File(dir, "Mauli_Stock_Sample.csv")
         val rows = listOf(
             CSV_HEADER,
-            listOf("Indicator Assembly Front", "IND-101", "Lights", "Lumax", "Splendor Plus", "A2", "pcs",
-                "120", "180", "200", "10", "3", "18", "8512", "Sai Agencies", ""),
-            listOf("Brake Shoe Set", "BS-220", "Brake", "Bosch", "Activa 5G", "B1", "set",
-                "160", "240", "260", "6", "2", "28", "8708", "", "")
+            listOf(
+                "Indicator Assembly Front", "IND-101", "Lights", "Lumax", "Splendor Plus", "A2", "pcs",
+                "120", "180", "200", "10", "3", "18", "8512", "Sai Agencies", ""
+            ),
+            listOf(
+                "Brake Shoe Set", "BS-220", "Brake", "Bosch", "Activa 5G", "B1", "set",
+                "160", "240", "260", "6", "2", "28", "8708", "", ""
+            )
         )
         file.writeText("\uFEFF" + rows.joinToString("\r\n") { csvLine(it) } + "\r\n")
         Printer.shareFile(context, file, "text/csv", "Save or send sample file")
