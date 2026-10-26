@@ -89,7 +89,8 @@ class MainActivity : ComponentActivity() {
 
 /** Screens that open on top of the main tabs (no bottom menu). */
 private fun Screen.isLeaf(): Boolean =
-    this is Screen.EditPart || this is Screen.BillView || this == Screen.Settings
+    this is Screen.EditPart || this is Screen.BillView || this is Screen.PurchaseEdit ||
+        this == Screen.Settings || this == Screen.Purchases
 
 @Composable
 fun MauliApp(vm: AppViewModel) {
@@ -148,8 +149,10 @@ private fun AppBody(vm: AppViewModel) {
                     Screen.Bills -> holder.SaveableStateProvider("bills") { BillsScreen(vm) }
                     Screen.Reports -> holder.SaveableStateProvider("reports") { ReportsScreen(vm) }
                     Screen.Settings -> SettingsScreen(vm)
+                    Screen.Purchases -> PurchasesScreen(vm)
                     is Screen.EditPart -> EditPartScreen(vm, s.id)
                     is Screen.BillView -> BillViewScreen(vm, s.id)
+                    is Screen.PurchaseEdit -> PurchaseEditScreen(vm, s.id)
                 }
             }
         }
