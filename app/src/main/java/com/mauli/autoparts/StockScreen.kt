@@ -98,7 +98,7 @@ fun categoryIcon(category: String): ImageVector {
     return when {
         "light" in c || "lamp" in c || "bulb" in c || "indicator" in c -> Icons.Rounded.WbIncandescent
         "electric" in c || "wiring" in c || "switch" in c || "horn" in c -> Icons.Rounded.FlashOn
-        "batter" in c -> Icons.Rounded.BatteryFull
+        "battery" in c -> Icons.Rounded.BatteryFull
         "brake" in c || "clutch" in c || "disc" in c -> Icons.Rounded.Album
         "oil" in c || "lube" in c || "coolant" in c -> Icons.Rounded.Opacity
         "tyre" in c || "tire" in c || "tube" in c || "wheel" in c -> Icons.Rounded.DonutLarge
