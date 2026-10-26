@@ -1,6 +1,7 @@
 package com.mauli.autoparts
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,9 +27,13 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LocalOffer
+import androidx.compose.material.icons.rounded.LocalShipping
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,6 +55,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -56,6 +63,9 @@ import kotlinx.coroutines.launch
 
 /** Name typed in Stock search, used to pre-fill a new part. */
 var pendingPartName: String = ""
+
+/** Part to put in a new purchase when "Record purchase" is tapped on the part screen. */
+var pendingPurchasePartId: Long = 0L
 
 val DefaultCategories = listOf(
     "Engine", "Electrical", "Lights", "Brake", "Clutch", "Suspension", "Body Parts", "Filters",
@@ -168,9 +178,34 @@ private fun FormCard(title: String, icon: ImageVector, tint: Color, content: @Co
     }
 }
 
+/** Warning shown when this part is sitting in an open (not yet saved) bill. */
+@Composable
+private fun OpenBillNotice(qty: Int, unit: String, stock: Int) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFFFFF7E6))
+            .border(1.dp, Amber.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(Icons.Rounded.Warning, null, tint = Amber, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text("$qty $unit in an open bill", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Stock will reduce by itself when that bill is saved ($stock → ${stock - qty}). Don't reduce it here.",
+                color = Muted, fontSize = 12.5.sp
+            )
+        }
+    }
+}
+
 @Composable
 fun EditPartScreen(vm: AppViewModel, id: Long) {
     val parts by vm.parts.collectAsState()
+    val history by remember(id) { vm.dao.partPurchases(id) }.collectAsState(initial = emptyList())
     var form by remember { mutableStateOf(PartForm()) }
     var original by remember { mutableStateOf<Part?>(null) }
     var added by remember { mutableIntStateOf(0) }
@@ -180,6 +215,7 @@ fun EditPartScreen(vm: AppViewModel, id: Long) {
     val scope = rememberCoroutineScope()
     val nameFocus = remember { FocusRequester() }
     val isNew = id == 0L
+    val inOpenBills = if (isNew) 0 else (vm.reserved()[id] ?: 0)
 
     LaunchedEffect(id) {
         if (isNew) {
@@ -232,8 +268,16 @@ fun EditPartScreen(vm: AppViewModel, id: Long) {
                 dup = same to next
                 return
             }
+            vm.savePart(p) { afterSave(next) }
+        } else {
+            // Keep any stock change that happened while this screen was open (bills, purchases).
+            val loaded = original?.qty ?: p.qty
+            scope.launch {
+                val fresh = vm.dao.part(id)
+                val qty = (fresh?.qty ?: loaded) + (p.qty - loaded)
+                vm.savePart(p.copy(qty = qty)) { afterSave(next) }
+            }
         }
-        vm.savePart(p) { afterSave(next) }
     }
 
     val buyN = form.buy.toNum()
@@ -259,6 +303,10 @@ fun EditPartScreen(vm: AppViewModel, id: Long) {
                 .verticalScroll(scroll)
                 .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
+            if (inOpenBills > 0) {
+                OpenBillNotice(inOpenBills, form.unit, original?.qty ?: 0)
+                Spacer(Modifier.height(14.dp))
+            }
             FormCard("Part details", Icons.Rounded.Build, Navy) {
                 AppField(form.name, { form = form.copy(name = it) }, "Part name *", Modifier.focusRequester(nameFocus))
                 Spacer(Modifier.height(10.dp))
@@ -331,7 +379,8 @@ fun EditPartScreen(vm: AppViewModel, id: Long) {
             FormCard("Stock", Icons.Rounded.Layers, Orange) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     AppField(
-                        form.qty, { form = form.copy(qty = digits(it)) }, if (isNew) "Quantity in shop" else "Quantity now",
+                        form.qty, { form = form.copy(qty = digits(it)) },
+                        if (isNew) "Quantity in shop" else "Quantity now",
                         Modifier.weight(1f), type = KeyboardType.Number
                     )
                     AppField(
@@ -348,6 +397,19 @@ fun EditPartScreen(vm: AppViewModel, id: Long) {
                     "You'll get a Low stock alert when quantity reaches ${form.minQty.ifBlank { "0" }}.",
                     color = Muted, fontSize = 12.sp
                 )
+                if (!isNew) {
+                    Spacer(Modifier.height(12.dp))
+                    LightButton("Record purchase (adds stock)", Modifier.fillMaxWidth(), icon = Icons.Rounded.LocalShipping, color = Teal) {
+                        pendingPurchasePartId = id
+                        vm.open(Screen.PurchaseEdit(0))
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "When new stock arrives, use Record purchase so the vendor, quantity and rate are saved. " +
+                            "Change the quantity above only to correct a counting mistake.",
+                        color = Muted, fontSize = 12.sp
+                    )
+                }
             }
             Spacer(Modifier.height(14.dp))
             FormCard("More details (optional)", Icons.Rounded.Info, Purple) {
@@ -360,6 +422,38 @@ fun EditPartScreen(vm: AppViewModel, id: Long) {
                     form.notes, { form = form.copy(notes = it) }, "Notes",
                     caps = KeyboardCapitalization.Sentences, singleLine = false
                 )
+            }
+            if (!isNew) {
+                Spacer(Modifier.height(14.dp))
+                FormCard("Purchased from", Icons.Rounded.LocalShipping, Teal) {
+                    if (history.isEmpty()) {
+                        Text("No purchases recorded for this part yet.", color = Muted, fontSize = 13.sp)
+                    } else {
+                        history.forEachIndexed { i, h ->
+                            if (i > 0) HorizontalDivider(color = Line)
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { vm.open(Screen.PurchaseEdit(h.id)) }
+                                    .padding(vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        h.vendor.ifBlank { "Vendor" }, color = Ink, fontSize = 14.5.sp,
+                                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(fmtDate(h.date), color = Muted, fontSize = 12.5.sp)
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("+${h.qty} ${form.unit}", color = Green, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                    Text("@ ${rs(h.rate)}", color = Muted, fontSize = 12.5.sp)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Spacer(Modifier.height(20.dp))
         }
