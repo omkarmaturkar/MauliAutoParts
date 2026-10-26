@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddCircle
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Motorcycle
 import androidx.compose.material.icons.rounded.QrCode
@@ -110,19 +111,25 @@ fun BillingScreen(vm: AppViewModel) {
     val density = LocalDensity.current
     val imeOpen by remember(ime, density) { derivedStateOf { ime.getBottom(density) > 0 } }
 
+    val editing = d.editId != 0L
+    val editEst = editing && d.editCode.startsWith("EST")
     val t = calcTotals(d.lines, d.discount.toNum())
     val count = d.lines.sumOf { it.qty }
     val autoPrint = s.autoPrint && s.printerAddress.isNotBlank()
     val partsById = remember(parts) { parts.associateBy { it.id } }
+    val reserved = vm.reserved()
     val results = remember(parts, query) { findParts(parts, query) }
-    val quick = remember(frequentIds, partsById) {
-        frequentIds.mapNotNull { partsById[it] }.filter { it.qty > 0 }.take(12)
-    }
+    val quick = frequentIds.mapNotNull { partsById[it] }.filter { it.qty - (reserved[it.id] ?: 0) > 0 }.take(12)
     val inBill = d.lines.filter { it.partId != null }.groupBy { it.partId }.mapValues { e -> e.value.sumOf { it.qty } }
+    val leftAfter = d.lines.mapNotNull { it.partId }.distinct().associateWith { pid ->
+        val p = partsById[pid]
+        if (p == null) 0 else vm.limitFor(p) - d.lines.filter { it.partId == pid }.sumOf { it.qty }
+    }
     val vKey = normVehicle(d.vehicleNo)
-    val history = remember(bills, vKey, d.phone) {
+    val history = remember(bills, vKey, d.phone, d.editId) {
         bills.filter {
-            !it.isEstimate && ((vKey.length >= 6 && it.vehicleNo == vKey) || (d.phone.length == 10 && it.phone == d.phone))
+            !it.isEstimate && it.id != d.editId &&
+                ((vKey.length >= 6 && it.vehicleNo == vKey) || (d.phone.length == 10 && it.phone == d.phone))
         }
     }
 
@@ -145,11 +152,15 @@ fun BillingScreen(vm: AppViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
-            title = "Billing",
-            subtitle = if (vm.drafts.size > 1) "${vm.drafts.size} bills open  •  tap to switch" else "Today  •  ${fmtDate(now())}",
+            title = if (editing) "Edit ${d.editCode}" else "Billing",
+            subtitle = when {
+                editing -> "Changes update the saved bill and its stock"
+                vm.drafts.size > 1 -> "${vm.drafts.size} bills open  •  tap to switch"
+                else -> "Today  •  ${fmtDate(now())}"
+            },
             actions = {
-                HeaderAction(Icons.Rounded.Delete, "Discard bill") {
-                    if (d.lines.isNotEmpty() || d.customer.isNotBlank() || d.vehicleNo.isNotBlank()) askDiscard = true
+                HeaderAction(Icons.Rounded.Delete, if (editing) "Cancel edit" else "Discard bill") {
+                    if (editing || d.lines.isNotEmpty() || d.customer.isNotBlank() || d.vehicleNo.isNotBlank()) askDiscard = true
                     else if (vm.drafts.size > 1) vm.discardDraft()
                     else vm.toast("This bill is already empty")
                 }
@@ -178,7 +189,7 @@ fun BillingScreen(vm: AppViewModel) {
                         }
                     }
                     items(results, key = { it.id }) { p ->
-                        ResultRow(p, inBill[p.id] ?: 0) {
+                        ResultRow(p, inBill[p.id] ?: 0, p.qty - (reserved[p.id] ?: 0)) {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             vm.addToBill(p, notify = true)
                             query = ""
@@ -195,7 +206,11 @@ fun BillingScreen(vm: AppViewModel) {
                         .verticalScroll(rememberScrollState())
                         .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp)
                 ) {
-                    if (quick.isNotEmpty()) {
+                    if (editing) {
+                        EditBanner(d.editCode) { askDiscard = true }
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    if (quick.isNotEmpty() && !editing) {
                         QuickPicks(quick) { p ->
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             vm.addToBill(p)
@@ -205,6 +220,7 @@ fun BillingScreen(vm: AppViewModel) {
                     ItemsCard(
                         d = d,
                         partsById = partsById,
+                        leftAfter = leftAfter,
                         onEdit = { editLine = it },
                         onMinus = { vm.changeQty(it, -1) },
                         onPlus = { vm.changeQty(it, 1) },
@@ -237,17 +253,34 @@ fun BillingScreen(vm: AppViewModel) {
                     )
                     Text(rs(t.total), color = Navy, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
                 }
-                LightButton("Estimate", color = Purple) { save(true) }
-                Spacer(Modifier.width(8.dp))
-                MainButton(if (autoPrint) "Save & Print" else "Save Bill", color = Orange) { save(false) }
+                when {
+                    editing && !editEst -> {
+                        LightButton("Cancel", color = Muted) { askDiscard = true }
+                        Spacer(Modifier.width(8.dp))
+                        MainButton("Update Bill", color = Orange) { save(false) }
+                    }
+                    editEst -> {
+                        LightButton("Update", color = Purple) { save(true) }
+                        Spacer(Modifier.width(8.dp))
+                        MainButton("Save as Bill", color = Orange) { save(false) }
+                    }
+                    else -> {
+                        LightButton("Estimate", color = Purple) { save(true) }
+                        Spacer(Modifier.width(8.dp))
+                        MainButton(if (autoPrint) "Save & Print" else "Save Bill", color = Orange) { save(false) }
+                    }
+                }
             }
         }
     }
 
     editLine?.let { line ->
+        val avail = line.partId?.let { pid ->
+            partsById[pid]?.let { p -> vm.limitFor(p) - d.lines.filter { it.partId == pid && it.id != line.id }.sumOf { it.qty } }
+        }
         EditLineDialog(
             line = line,
-            stock = line.partId?.let { partsById[it]?.qty },
+            stock = avail,
             onSave = { q, price -> vm.updateLine(line, q, price) },
             onRemove = { vm.removeLine(line) },
             onDismiss = { editLine = null }
@@ -266,13 +299,35 @@ fun BillingScreen(vm: AppViewModel) {
     if (showQr) UpiQrDialog(s, t.total, "Bill payment") { showQr = false }
     if (askDiscard) {
         ConfirmDialog(
-            title = "Discard this bill?",
-            text = "All items and customer details in this bill will be cleared. Stock is not changed.",
-            confirm = "Discard",
+            title = if (editing) "Cancel editing?" else "Discard this bill?",
+            text = if (editing) "Your changes will be lost. The saved bill ${d.editCode} stays exactly as it was."
+            else "All items and customer details in this bill will be cleared. Stock is not changed.",
+            confirm = if (editing) "Cancel edit" else "Discard",
             danger = true,
             onConfirm = { vm.discardDraft() },
             onDismiss = { askDiscard = false }
         )
+    }
+}
+
+@Composable
+private fun EditBanner(code: String, onCancel: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(OrangeSoft)
+            .border(1.dp, Orange.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+            .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Rounded.Edit, null, tint = Orange, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Editing $code", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text("Change items or details, then tap Update. Stock is corrected automatically.", color = Muted, fontSize = 12.sp)
+        }
+        TextButton(onClick = onCancel) { Text("Cancel", color = Red, fontWeight = FontWeight.Bold) }
     }
 }
 
@@ -287,11 +342,22 @@ private fun BillTabs(vm: AppViewModel, onNew: () -> Unit) {
     ) {
         vm.drafts.forEachIndexed { i, d ->
             val on = i == vm.current
-            val label = d.customer.ifBlank { vehicleLabel(d.vehicleNo) }.ifBlank { "Bill ${i + 1}" }
+            val total = calcTotals(d.lines, d.discount.toNum()).total
+            val label = when {
+                d.customer.isNotBlank() -> d.customer
+                d.vehicleNo.isNotBlank() -> vehicleLabel(d.vehicleNo)
+                d.editId != 0L -> d.editCode
+                else -> "Bill ${i + 1}"
+            }
+            val sub = when {
+                d.editId != 0L -> "Editing • ${rs(total)}"
+                d.lines.isEmpty() -> "Empty"
+                else -> rs(total)
+            }
             Column(
                 Modifier
                     .height(48.dp)
-                    .widthIn(max = 160.dp)
+                    .widthIn(max = 170.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(if (on) Color.White else Color.White.copy(alpha = 0.14f))
                     .clickable { vm.current = i }
@@ -303,7 +369,7 @@ private fun BillTabs(vm: AppViewModel, onNew: () -> Unit) {
                     fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    if (d.lines.isEmpty()) "Empty" else rs(calcTotals(d.lines, d.discount.toNum()).total),
+                    sub,
                     color = if (on) Orange else Color.White.copy(alpha = 0.7f),
                     fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
                 )
@@ -326,8 +392,8 @@ private fun BillTabs(vm: AppViewModel, onNew: () -> Unit) {
 }
 
 @Composable
-private fun ResultRow(p: Part, inBill: Int, onClick: () -> Unit) {
-    val out = p.qty <= 0
+private fun ResultRow(p: Part, inBill: Int, avail: Int, onClick: () -> Unit) {
+    val out = avail <= 0
     AppCard(Modifier.fillMaxWidth(), onClick = onClick, padding = 12.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconBadge(categoryIcon(p.category), tagColor(p.category), 40.dp)
@@ -339,9 +405,14 @@ private fun ResultRow(p: Part, inBill: Int, onClick: () -> Unit) {
                     Text(info, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Text(
-                    (if (out) "Out of stock" else "${p.qty} ${p.unit} in stock") +
+                    (if (out) "Out of stock" else "$avail ${p.unit} available") +
                         (if (p.rack.isNotBlank()) "  •  Rack ${p.rack}" else ""),
-                    color = stockColor(p), fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                    color = when {
+                        out -> Red
+                        avail <= p.minQty -> Amber
+                        else -> Green
+                    },
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold
                 )
             }
             Spacer(Modifier.width(8.dp))
@@ -376,7 +447,7 @@ private fun CustomRow(text: String, onClick: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text("Add \"$text\" as labour / other item", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text("For service charges or parts not in stock", color = Muted, fontSize = 12.sp)
+            Text("For service charges or things not in your stock list. Stock won't change.", color = Muted, fontSize = 12.sp)
         }
     }
 }
@@ -423,6 +494,7 @@ private fun QuickPicks(quick: List<Part>, onPick: (Part) -> Unit) {
 private fun ItemsCard(
     d: Draft,
     partsById: Map<Long, Part>,
+    leftAfter: Map<Long, Int>,
     onEdit: (BillItem) -> Unit,
     onMinus: (BillItem) -> Unit,
     onPlus: (BillItem) -> Unit,
@@ -445,7 +517,12 @@ private fun ItemsCard(
             Spacer(Modifier.height(4.dp))
             d.lines.forEachIndexed { i, line ->
                 if (i > 0) HorizontalDivider(color = Line)
-                LineRow(line, line.partId?.let { partsById[it] }, onEdit, onMinus, onPlus)
+                LineRow(
+                    line = line,
+                    part = line.partId?.let { partsById[it] },
+                    left = line.partId?.let { leftAfter[it] },
+                    onEdit = onEdit, onMinus = onMinus, onPlus = onPlus
+                )
             }
             Spacer(Modifier.height(6.dp))
         }
@@ -457,6 +534,7 @@ private fun ItemsCard(
 private fun LineRow(
     line: BillItem,
     part: Part?,
+    left: Int?,
     onEdit: (BillItem) -> Unit,
     onMinus: (BillItem) -> Unit,
     onPlus: (BillItem) -> Unit
@@ -471,18 +549,16 @@ private fun LineRow(
             Text(line.name, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("${rs(line.price)} each", color = Muted, fontSize = 12.5.sp)
+                Spacer(Modifier.width(8.dp))
                 when {
-                    line.partId == null -> {
-                        Spacer(Modifier.width(6.dp))
-                        Pill("Labour", Teal)
-                    }
-                    part != null && part.qty < line.qty -> {
-                        Spacer(Modifier.width(6.dp))
-                        Pill("Only ${part.qty} in stock", Red)
-                    }
-                    part != null && part.rack.isNotBlank() -> {
-                        Text("  •  Rack ${part.rack}", color = Faint, fontSize = 12.sp)
-                    }
+                    line.partId == null -> Pill("Labour", Teal)
+                    part == null -> Pill("Not in stock list", Red)
+                    left != null && left < 0 -> Pill("Short by ${-left}", Red)
+                    left != null -> Text(
+                        "Stock left: $left",
+                        color = if (left <= part.minQty) Amber else Green,
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
             Text(rs(line.qty * line.price), color = Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold)
@@ -643,7 +719,7 @@ private fun EditLineDialog(
         title = { Text(line.name, color = Ink, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column {
-                if (stock != null) Text("In stock: $stock", color = Muted, fontSize = 13.sp)
+                if (stock != null) Text("Available for this bill: $stock", color = Muted, fontSize = 13.sp)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     AppField(
@@ -699,6 +775,12 @@ private fun CustomItemDialog(initialName: String, onAdd: (String, Double, Int) -
         title = { Text("Labour / other item", color = Ink, fontWeight = FontWeight.Bold) },
         text = {
             Column {
+                Text(
+                    "For labour or things not in your stock list. Stock won't change. " +
+                        "If the name matches a stock part, it will be linked automatically.",
+                    color = Muted, fontSize = 12.5.sp
+                )
+                Spacer(Modifier.height(10.dp))
                 Row(
                     Modifier
                         .fillMaxWidth()
