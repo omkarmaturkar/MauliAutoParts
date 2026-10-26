@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.AddCircle
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Delete
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Motorcycle
 import androidx.compose.material.icons.rounded.QrCode
 import androidx.compose.material.icons.rounded.Receipt
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -50,6 +52,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,6 +62,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -72,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val PayModes = listOf("Cash", "UPI", "Card", "Udhaar")
 private val LabourPresets = listOf("Labour", "Service", "Fitting", "Repair", "Washing")
@@ -97,19 +102,31 @@ private fun findParts(parts: List<Part>, query: String): List<Part> {
 fun BillingScreen(vm: AppViewModel) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     val parts by vm.parts.collectAsState()
     val bills by vm.bills.collectAsState()
     val frequentIds by vm.frequent.collectAsState()
     val s = vm.settings
     val d = vm.draft
     var query by rememberSaveable { mutableStateOf("") }
+    var tab by rememberSaveable { mutableStateOf(if (vm.draft.lines.isEmpty()) "add" else "bill") }
+    var catFilter by rememberSaveable { mutableStateOf("All") }
+    var editList by remember { mutableStateOf(false) }
     var editLine by remember { mutableStateOf<BillItem?>(null) }
     var customName by remember { mutableStateOf<String?>(null) }
+    var newPartName by remember { mutableStateOf<String?>(null) }
+    var serviceEdit by remember { mutableStateOf<ServiceItem?>(null) }
+    var serviceNew by remember { mutableStateOf(false) }
+    var askPack by remember { mutableStateOf(false) }
+    var packToDelete by remember { mutableStateOf<Pack?>(null) }
     var showQr by remember { mutableStateOf(false) }
     var askDiscard by remember { mutableStateOf(false) }
     val ime = WindowInsets.ime
     val density = LocalDensity.current
     val imeOpen by remember(ime, density) { derivedStateOf { ime.getBottom(density) > 0 } }
+
+    LaunchedEffect(Unit) { Catalog.load(vm) }
+    LaunchedEffect(d.editId) { if (d.editId != 0L) tab = "bill" }
 
     val editing = d.editId != 0L
     val editEst = editing && d.editCode.startsWith("EST")
@@ -118,9 +135,21 @@ fun BillingScreen(vm: AppViewModel) {
     val autoPrint = s.autoPrint && s.printerAddress.isNotBlank()
     val partsById = remember(parts) { parts.associateBy { it.id } }
     val reserved = vm.reserved()
+    val services = Catalog.services.toList()
+    val packs = Catalog.packs.toList()
+    val q = query.trim()
     val results = remember(parts, query) { findParts(parts, query) }
+    val serviceHits = if (q.isEmpty()) emptyList() else services.filter { it.name.contains(q, true) }
     val quick = frequentIds.mapNotNull { partsById[it] }.filter { it.qty - (reserved[it.id] ?: 0) > 0 }.take(12)
+    val categories = remember(parts) {
+        listOf("All") + parts.map { it.category.ifBlank { "General" } }.distinct().sortedBy { it.lowercase() }
+    }
+    val cat = if (catFilter in categories) catFilter else "All"
+    val shownParts = remember(parts, cat) {
+        if (cat == "All") parts else parts.filter { it.category.ifBlank { "General" } == cat }
+    }
     val inBill = d.lines.filter { it.partId != null }.groupBy { it.partId }.mapValues { e -> e.value.sumOf { it.qty } }
+    val serviceQty = d.lines.filter { it.partId == null }.groupBy { it.name.lowercase() }.mapValues { e -> e.value.sumOf { it.qty } }
     val leftAfter = d.lines.mapNotNull { it.partId }.distinct().associateWith { pid ->
         val p = partsById[pid]
         if (p == null) 0 else vm.limitFor(p) - d.lines.filter { it.partId == pid }.sumOf { it.qty }
@@ -131,6 +160,24 @@ fun BillingScreen(vm: AppViewModel) {
             !it.isEstimate && it.id != d.editId &&
                 ((vKey.length >= 6 && it.vehicleNo == vKey) || (d.phone.length == 10 && it.phone == d.phone))
         }
+    }
+
+    fun addPart(p: Part) {
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        vm.addToBill(p)
+    }
+
+    fun minusPart(p: Part) {
+        vm.draft.lines.find { it.partId == p.id }?.let { vm.changeQty(it, -1) }
+    }
+
+    fun addSvc(sv: ServiceItem) {
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        Catalog.addService(vm, sv)
+    }
+
+    fun minusSvc(sv: ServiceItem) {
+        vm.draft.lines.find { it.partId == null && it.name.equals(sv.name, true) }?.let { vm.changeQty(it, -1) }
     }
 
     fun save(estimate: Boolean) {
@@ -145,6 +192,7 @@ fun BillingScreen(vm: AppViewModel) {
         }
         vm.saveBill(estimate) { id ->
             query = ""
+            tab = "add"
             if (!estimate && autoPrint) vm.printThermal(context, id)
             vm.open(Screen.BillView(id))
         }
@@ -169,23 +217,32 @@ fun BillingScreen(vm: AppViewModel) {
                 if (!imeOpen && query.isBlank()) {
                     BillTabs(vm) {
                         query = ""
+                        tab = "add"
                         vm.newDraft()
                     }
                     Spacer(Modifier.height(10.dp))
                 }
-                SearchBox(query, { query = it }, "Search part to add: name, part no, vehicle")
+                SearchBox(query, { query = it }, "Search parts or services")
             }
         )
+        if (query.isBlank()) {
+            val tabs = listOf("Add items", if (count > 0) "Bill • $count" else "Bill")
+            Segmented(
+                tabs, if (tab == "add") tabs[0] else tabs[1], { tab = if (it == tabs[0]) "add" else "bill" },
+                Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
+            )
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (query.isNotBlank()) {
-                LazyColumn(
+            when {
+                q.isNotEmpty() -> LazyColumn(
                     Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (results.isEmpty()) {
-                        item(key = "none") {
-                            Text("No part found for \"${query.trim()}\"", Modifier.padding(8.dp), color = Muted, fontSize = 14.sp)
+                    items(serviceHits) { sv ->
+                        ServiceRow(sv, serviceQty[sv.name.lowercase()] ?: 0) {
+                            addSvc(sv)
+                            query = ""
                         }
                     }
                     items(results, key = { it.id }) { p ->
@@ -195,12 +252,101 @@ fun BillingScreen(vm: AppViewModel) {
                             query = ""
                         }
                     }
-                    item(key = "custom") {
-                        CustomRow(query.trim()) { customName = query.trim().replaceFirstChar { it.uppercase() } }
+                    if (results.isEmpty() && serviceHits.isEmpty()) {
+                        item(key = "none") {
+                            Text("Nothing found for \"$q\". Add it below:", Modifier.padding(4.dp), color = Muted, fontSize = 14.sp)
+                        }
+                    }
+                    item(key = "newPart") {
+                        CreateRow(
+                            Icons.Rounded.AddBox, Orange, "Add \"$q\" as a new part",
+                            "Saves it in your stock list and adds it to this bill"
+                        ) { newPartName = q.replaceFirstChar { it.uppercase() } }
+                    }
+                    item(key = "labour") {
+                        CreateRow(
+                            Icons.Rounded.Build, Teal, "Add \"$q\" as labour / service",
+                            "Not from stock. Saved as a service button for next time"
+                        ) { customName = q.replaceFirstChar { it.uppercase() } }
                     }
                 }
-            } else {
-                Column(
+
+                tab == "add" -> LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (editing) {
+                        item(key = "edit") { EditBanner(d.editCode) { askDiscard = true } }
+                    }
+                    item(key = "vehicle") {
+                        VehicleStrip(vm, d, history) { last ->
+                            scope.launch { Catalog.addLines(vm, vm.dao.items(last.id), "Last visit") }
+                        }
+                    }
+                    if (packs.isNotEmpty()) {
+                        item(key = "packs") {
+                            PacksRow(packs, editList, onApply = { p -> Catalog.addLines(vm, p.lines, p.name) }, onDelete = { packToDelete = it })
+                        }
+                    }
+                    item(key = "svcTitle") {
+                        SectionTitle("Services & labour", action = if (editList) "Done" else "Edit list") { editList = !editList }
+                    }
+                    items(services.chunked(2)) { row ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            row.forEach { sv ->
+                                ServiceTile(
+                                    sv, serviceQty[sv.name.lowercase()] ?: 0, editList, Modifier.weight(1f),
+                                    onTap = { if (editList) serviceEdit = sv else addSvc(sv) },
+                                    onMinus = { minusSvc(sv) }
+                                )
+                            }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                    item(key = "svcNew") {
+                        Text(
+                            "+ New service",
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(1.dp, Teal.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                                .clickable { serviceNew = true }
+                                .padding(vertical = 12.dp),
+                            color = Teal, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center
+                        )
+                    }
+                    if (quick.isNotEmpty()) {
+                        item(key = "quick") {
+                            Column {
+                                Spacer(Modifier.height(6.dp))
+                                QuickPicks(quick) { addPart(it) }
+                            }
+                        }
+                    }
+                    item(key = "partsTitle") {
+                        SectionTitle("Parts in stock (${parts.size})", action = "+ New part") { newPartName = "" }
+                    }
+                    if (categories.size > 2) {
+                        item(key = "cats") { ChipRow(categories, cat, { catFilter = it }) }
+                    }
+                    if (parts.isEmpty()) {
+                        item(key = "noParts") {
+                            Text(
+                                "No parts in stock yet. Add them from the Stock screen, or tap + New part.",
+                                color = Muted, fontSize = 13.5.sp
+                            )
+                        }
+                    }
+                    items(shownParts, key = { it.id }) { p ->
+                        PartPickRow(
+                            p, inBill[p.id] ?: 0, p.qty - (reserved[p.id] ?: 0),
+                            onAdd = { addPart(p) }, onMinus = { minusPart(p) }
+                        )
+                    }
+                }
+
+                else -> Column(
                     Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
@@ -210,13 +356,6 @@ fun BillingScreen(vm: AppViewModel) {
                         EditBanner(d.editCode) { askDiscard = true }
                         Spacer(Modifier.height(12.dp))
                     }
-                    if (quick.isNotEmpty() && !editing) {
-                        QuickPicks(quick) { p ->
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            vm.addToBill(p)
-                        }
-                        Spacer(Modifier.height(12.dp))
-                    }
                     ItemsCard(
                         d = d,
                         partsById = partsById,
@@ -224,7 +363,8 @@ fun BillingScreen(vm: AppViewModel) {
                         onEdit = { editLine = it },
                         onMinus = { vm.changeQty(it, -1) },
                         onPlus = { vm.changeQty(it, 1) },
-                        onLabour = { customName = "" }
+                        onAddMore = { tab = "add" },
+                        onSavePack = { askPack = true }
                     )
                     Spacer(Modifier.height(12.dp))
                     CustomerCard(vm, d, history)
@@ -246,7 +386,12 @@ fun BillingScreen(vm: AppViewModel) {
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(Modifier.weight(1f)) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { tab = "bill" }
+                ) {
                     Text(
                         if (count == 0) "No items yet" else "$count item${if (count == 1) "" else "s"}  •  Total",
                         color = Muted, fontSize = 12.sp, maxLines = 1
@@ -281,7 +426,7 @@ fun BillingScreen(vm: AppViewModel) {
         EditLineDialog(
             line = line,
             stock = avail,
-            onSave = { q, price -> vm.updateLine(line, q, price) },
+            onSave = { qn, price -> vm.updateLine(line, qn, price) },
             onRemove = { vm.removeLine(line) },
             onDismiss = { editLine = null }
         )
@@ -289,11 +434,53 @@ fun BillingScreen(vm: AppViewModel) {
     customName?.let { name ->
         CustomItemDialog(
             initialName = name,
-            onAdd = { n, price, q ->
-                vm.addCustom(n, price, q)
+            onAdd = { n, price, qn ->
+                vm.addCustom(n, price, qn)
+                Catalog.learn(vm, n, price)
                 query = ""
             },
             onDismiss = { customName = null }
+        )
+    }
+    newPartName?.let { name ->
+        BillNewPartDialog(
+            initialName = name,
+            onCreate = { n, sell, buy, qn ->
+                Catalog.newPartToBill(vm, n, sell, buy, qn)
+                query = ""
+            },
+            onDismiss = { newPartName = null }
+        )
+    }
+    if (serviceNew) {
+        ServiceDialog(null, onSave = { n, p -> Catalog.saveService(vm, null, n, p) }, onDelete = null) { serviceNew = false }
+    }
+    serviceEdit?.let { sv ->
+        ServiceDialog(
+            sv,
+            onSave = { n, p -> Catalog.saveService(vm, sv, n, p) },
+            onDelete = { Catalog.deleteService(vm, sv) }
+        ) { serviceEdit = null }
+    }
+    if (askPack) {
+        InputDialog(
+            title = "Save as package",
+            label = "Package name (e.g. General Service)",
+            type = KeyboardType.Text,
+            message = "Saves these ${d.lines.size} items. Next time, one tap adds them all.",
+            confirm = "Save",
+            onConfirm = { name -> Catalog.savePack(vm, name, vm.draft.lines) },
+            onDismiss = { askPack = false }
+        )
+    }
+    packToDelete?.let { p ->
+        ConfirmDialog(
+            title = "Delete package?",
+            text = "\"${p.name}\" will be removed. Bills already made are not changed.",
+            confirm = "Delete",
+            danger = true,
+            onConfirm = { Catalog.deletePack(vm, p) },
+            onDismiss = { packToDelete = null }
         )
     }
     if (showQr) UpiQrDialog(s, t.total, "Bill payment") { showQr = false }
@@ -309,6 +496,212 @@ fun BillingScreen(vm: AppViewModel) {
         )
     }
 }
+
+// ================= Add items tab =================
+
+/** Vehicle first (like a job card). Old customers fill in automatically. */
+@Composable
+private fun VehicleStrip(vm: AppViewModel, d: Draft, history: List<Bill>, onRepeat: (Bill) -> Unit) {
+    AppCard(Modifier.fillMaxWidth(), padding = 12.dp) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            AppField(d.vehicleNo, { vm.onVehicle(it) }, "Vehicle no.", Modifier.weight(1f), caps = KeyboardCapitalization.Characters)
+            AppField(d.phone, { vm.onPhone(it) }, "Mobile", Modifier.weight(1f), type = KeyboardType.Phone)
+        }
+        if (d.customer.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text("Customer: ${d.customer}" + (if (d.model.isNotBlank()) "  •  ${d.model}" else ""), color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (history.isNotEmpty()) {
+            val last = history.first()
+            val due = history.sumOf { it.due }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(NavySoft)
+                    .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Rounded.History, null, tint = Navy, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Last visit ${fmtDate(last.date)}  •  ${rs(last.total)}",
+                        color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (due > 0.009) "Pending: ${rs(due)}" else "${history.size} visit${if (history.size == 1) "" else "s"}  •  No pending",
+                        color = if (due > 0.009) Red else Muted, fontSize = 12.sp
+                    )
+                }
+                TextButton(onClick = { onRepeat(last) }) { Text("Repeat items", color = Orange, fontWeight = FontWeight.Bold) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PacksRow(packs: List<Pack>, editMode: Boolean, onApply: (Pack) -> Unit, onDelete: (Pack) -> Unit) {
+    Column {
+        Text(
+            if (editMode) "Packages  •  tap one to delete it" else "Packages  •  one tap adds all items",
+            Modifier.padding(start = 4.dp, bottom = 8.dp),
+            color = Muted, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold
+        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            packs.forEach { p ->
+                Column(
+                    Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (editMode) Red.copy(alpha = 0.06f) else Purple.copy(alpha = 0.08f))
+                        .border(1.dp, if (editMode) Red.copy(alpha = 0.4f) else Purple.copy(alpha = 0.3f), RoundedCornerShape(14.dp))
+                        .clickable { if (editMode) onDelete(p) else onApply(p) }
+                        .padding(horizontal = 14.dp, vertical = 9.dp)
+                ) {
+                    Text(p.name, color = Ink, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text("${p.lines.size} items", color = if (editMode) Red else Purple, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServiceTile(
+    sv: ServiceItem,
+    qty: Int,
+    editMode: Boolean,
+    modifier: Modifier,
+    onTap: () -> Unit,
+    onMinus: () -> Unit
+) {
+    val on = qty > 0
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (on) Teal.copy(alpha = 0.10f) else Color.White)
+            .border(1.dp, if (on) Teal else Line, RoundedCornerShape(14.dp))
+            .clickable(onClick = onTap)
+            .padding(10.dp)
+    ) {
+        Text(sv.name, color = Ink, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(rs(sv.price), Modifier.weight(1f), color = Teal, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            when {
+                editMode -> Icon(Icons.Rounded.Edit, "Edit", tint = Muted, modifier = Modifier.size(18.dp))
+                on -> {
+                    Box(
+                        Modifier
+                            .size(26.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.White)
+                            .clickable(onClick = onMinus),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(Icons.Rounded.Remove, "Less", tint = Teal, modifier = Modifier.size(16.dp)) }
+                    Spacer(Modifier.width(6.dp))
+                    Text("×$qty", color = Teal, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+                }
+                else -> Icon(Icons.Rounded.AddCircle, "Add", tint = Teal, modifier = Modifier.size(22.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PartPickRow(p: Part, inBill: Int, avail: Int, onAdd: () -> Unit, onMinus: () -> Unit) {
+    AppCard(Modifier.fillMaxWidth(), onClick = onAdd, padding = 10.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(categoryIcon(p.category), tagColor(p.category), 38.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(p.name, color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    listOf(rs(p.sellPrice), if (p.rack.isNotBlank()) "Rack ${p.rack}" else "", p.partNo)
+                        .filter { it.isNotBlank() }.joinToString("  •  "),
+                    color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    if (avail <= 0) "No stock left" else "$avail ${p.unit} available",
+                    color = when {
+                        avail <= 0 -> Red
+                        avail <= p.minQty -> Amber
+                        else -> Green
+                    },
+                    fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            if (inBill > 0) {
+                QtyStepper(inBill, onMinus, onAdd)
+            } else {
+                Text(
+                    "+ Add",
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (avail > 0) Orange else Faint)
+                        .clickable(onClick = onAdd)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServiceRow(sv: ServiceItem, qty: Int, onClick: () -> Unit) {
+    AppCard(Modifier.fillMaxWidth(), onClick = onClick, padding = 12.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(Icons.Rounded.Build, Teal, 38.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(sv.name, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Service / labour", color = Muted, fontSize = 12.sp)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(rs(sv.price), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (qty > 0) "In bill: $qty" else "+ Add",
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (qty > 0) Navy else Teal)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreateRow(icon: ImageVector, tint: Color, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.5.dp, tint.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconBadge(icon, tint, 36.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, color = Muted, fontSize = 12.sp)
+        }
+    }
+}
+
+// ================= Shared pieces =================
 
 @Composable
 private fun EditBanner(code: String, onCancel: () -> Unit) {
@@ -432,31 +825,11 @@ private fun ResultRow(p: Part, inBill: Int, avail: Int, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun CustomRow(text: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .border(1.5.dp, Teal.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconBadge(Icons.Rounded.Build, Teal, 36.dp)
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text("Add \"$text\" as labour / other item", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text("For service charges or things not in your stock list. Stock won't change.", color = Muted, fontSize = 12.sp)
-        }
-    }
-}
-
 /** Most-sold parts as big buttons: one tap adds to the bill. */
 @Composable
 private fun QuickPicks(quick: List<Part>, onPick: (Part) -> Unit) {
     Text(
-        "Quick add  •  most sold",
+        "Most sold",
         Modifier.padding(start = 4.dp, bottom = 8.dp),
         color = Muted, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold
     )
@@ -490,6 +863,8 @@ private fun QuickPicks(quick: List<Part>, onPick: (Part) -> Unit) {
     }
 }
 
+// ================= Bill tab =================
+
 @Composable
 private fun ItemsCard(
     d: Draft,
@@ -498,7 +873,8 @@ private fun ItemsCard(
     onEdit: (BillItem) -> Unit,
     onMinus: (BillItem) -> Unit,
     onPlus: (BillItem) -> Unit,
-    onLabour: () -> Unit
+    onAddMore: () -> Unit,
+    onSavePack: () -> Unit
 ) {
     AppCard(Modifier.fillMaxWidth(), padding = 14.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -509,7 +885,7 @@ private fun ItemsCard(
         }
         if (d.lines.isEmpty()) {
             Text(
-                "Search a part above or tap a quick part. Stock reduces automatically when you save the bill.",
+                "No items yet. Tap Add items to pick services and parts.",
                 Modifier.padding(vertical = 14.dp),
                 color = Muted, fontSize = 13.5.sp
             )
@@ -526,7 +902,12 @@ private fun ItemsCard(
             }
             Spacer(Modifier.height(6.dp))
         }
-        LightButton("Add labour / service charge", Modifier.fillMaxWidth(), icon = Icons.Rounded.Build, color = Teal, onClick = onLabour)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            LightButton("Add items", Modifier.weight(1f), icon = Icons.Rounded.Add, color = Navy, onClick = onAddMore)
+            if (d.lines.isNotEmpty()) {
+                LightButton("Save as package", Modifier.weight(1f), color = Purple, onClick = onSavePack)
+            }
+        }
     }
 }
 
@@ -551,7 +932,7 @@ private fun LineRow(
                 Text("${rs(line.price)} each", color = Muted, fontSize = 12.5.sp)
                 Spacer(Modifier.width(8.dp))
                 when {
-                    line.partId == null -> Pill("Labour", Teal)
+                    line.partId == null -> Pill("Service", Teal)
                     part == null -> Pill("Not in stock list", Red)
                     left != null && left < 0 -> Pill("Short by ${-left}", Red)
                     left != null -> Text(
@@ -702,6 +1083,8 @@ private fun QuickChip(text: String, onClick: () -> Unit) {
     )
 }
 
+// ================= Dialogs =================
+
 @Composable
 private fun EditLineDialog(
     line: BillItem,
@@ -772,12 +1155,11 @@ private fun CustomItemDialog(initialName: String, onAdd: (String, Double, Int) -
         onDismissRequest = onDismiss,
         containerColor = Color.White,
         shape = RoundedCornerShape(24.dp),
-        title = { Text("Labour / other item", color = Ink, fontWeight = FontWeight.Bold) },
+        title = { Text("Labour / service", color = Ink, fontWeight = FontWeight.Bold) },
         text = {
             Column {
                 Text(
-                    "For labour or things not in your stock list. Stock won't change. " +
-                        "If the name matches a stock part, it will be linked automatically.",
+                    "Not from stock, so stock won't change. It is saved as a service button for next time.",
                     color = Muted, fontSize = 12.5.sp
                 )
                 Spacer(Modifier.height(10.dp))
@@ -816,6 +1198,109 @@ private fun CustomItemDialog(initialName: String, onAdd: (String, Double, Int) -
             ) { Text("Add to bill", fontWeight = FontWeight.Bold) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } }
+    )
+}
+
+@Composable
+private fun BillNewPartDialog(initialName: String, onCreate: (String, Double, Double, Int) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initialName) }
+    var sell by remember { mutableStateOf("") }
+    var buy by remember { mutableStateOf("") }
+    var qty by remember { mutableStateOf("1") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        shape = RoundedCornerShape(24.dp),
+        title = { Text("New part", color = Ink, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(
+                    "It will be saved in your stock list and added to this bill. Stock reduces when the bill is saved.",
+                    color = Muted, fontSize = 12.5.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                AppField(name, { name = it }, "Part name *")
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AppField(
+                        sell, { sell = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Sell price *",
+                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ "
+                    )
+                    AppField(
+                        buy, { buy = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Buy price",
+                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ "
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                AppField(
+                    qty, { qty = it.filter { c -> c.isDigit() }.take(5) }, "How many in shop (with this one)",
+                    type = KeyboardType.Number, imeAction = ImeAction.Done
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onCreate(name.trim(), sell.toNum(), buy.toNum(), (qty.toIntOrNull() ?: 1).coerceAtLeast(1))
+                    onDismiss()
+                },
+                enabled = name.isNotBlank() && sell.toNum() > 0,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Orange)
+            ) { Text("Add", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } }
+    )
+}
+
+@Composable
+private fun ServiceDialog(
+    initial: ServiceItem?,
+    onSave: (String, Double) -> Unit,
+    onDelete: (() -> Unit)?,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var price by remember { mutableStateOf(initial?.let { num(it.price) } ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        shape = RoundedCornerShape(24.dp),
+        title = { Text(if (initial == null) "New service" else "Edit service", color = Ink, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Saved services show as buttons in Billing. One tap adds them to the bill.", color = Muted, fontSize = 12.5.sp)
+                Spacer(Modifier.height(10.dp))
+                AppField(name, { name = it }, "Service / labour name")
+                Spacer(Modifier.height(10.dp))
+                AppField(
+                    price, { price = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Charge",
+                    type = KeyboardType.Decimal, prefix = "₹ ", imeAction = ImeAction.Done
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(name, price.toNum())
+                    onDismiss()
+                },
+                enabled = name.isNotBlank(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Teal)
+            ) { Text("Save", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            Row {
+                if (onDelete != null) {
+                    TextButton(onClick = {
+                        onDelete()
+                        onDismiss()
+                    }) { Text("Delete", color = Red, fontWeight = FontWeight.SemiBold) }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) }
+            }
+        }
     )
 }
 
