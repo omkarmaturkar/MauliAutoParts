@@ -13,6 +13,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
 import org.json.JSONObject
@@ -42,6 +44,11 @@ data class Part(
     val updatedAt: Long = 0
 )
 
+/**
+ * A saved document.
+ * kind 0 = sale bill (an estimate when isEstimate = true)
+ * kind 1 = purchase from a vendor: customer = vendor name, phone = vendor phone, ref = vendor's bill no.
+ */
 @Entity(tableName = "bills", indices = [Index("date"), Index("vehicleNo"), Index("phone")])
 data class Bill(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -59,7 +66,9 @@ data class Bill(
     val paid: Double = 0.0,
     val payMode: String = "Cash",
     val profit: Double = 0.0,
-    val note: String = ""
+    val note: String = "",
+    val kind: Int = 0,
+    val ref: String = ""
 )
 
 @Entity(tableName = "bill_items", indices = [Index("billId"), Index("partId")])
@@ -76,6 +85,9 @@ data class BillItem(
 )
 
 data class TopSeller(val name: String, val qty: Int, val amount: Double)
+
+/** One purchase of a part, for the part's "purchased from" history. */
+data class PartPurchase(val id: Long, val date: Long, val vendor: String, val qty: Int, val rate: Double)
 
 @Dao
 interface AppDao {
@@ -103,8 +115,14 @@ interface AppDao {
     @Query("UPDATE parts SET buyPrice = :price WHERE id = :id")
     suspend fun setBuyPrice(id: Long, price: Double)
 
-    @Query("SELECT * FROM bills ORDER BY date DESC")
+    @Query("UPDATE parts SET supplier = :supplier WHERE id = :id")
+    suspend fun setSupplier(id: Long, supplier: String)
+
+    @Query("SELECT * FROM bills WHERE kind = 0 ORDER BY date DESC")
     fun billsFlow(): Flow<List<Bill>>
+
+    @Query("SELECT * FROM bills WHERE kind = 1 ORDER BY date DESC")
+    fun purchasesFlow(): Flow<List<Bill>>
 
     @Query("SELECT * FROM bills")
     suspend fun allBills(): List<Bill>
@@ -124,8 +142,11 @@ interface AppDao {
     @Query("SELECT * FROM bill_items")
     suspend fun allItems(): List<BillItem>
 
-    @Query("SELECT IFNULL(MAX(billNo), 0) + 1 FROM bills WHERE isEstimate = :estimate")
+    @Query("SELECT IFNULL(MAX(billNo), 0) + 1 FROM bills WHERE isEstimate = :estimate AND kind = 0")
     suspend fun nextNo(estimate: Boolean): Int
+
+    @Query("SELECT IFNULL(MAX(billNo), 0) + 1 FROM bills WHERE kind = 1")
+    suspend fun nextPurchaseNo(): Int
 
     @Insert
     suspend fun insertBill(b: Bill): Long
@@ -142,14 +163,17 @@ interface AppDao {
     @Query("DELETE FROM bill_items WHERE billId = :billId")
     suspend fun deleteItems(billId: Long)
 
-    @Query("SELECT * FROM bills WHERE (:vehicle != '' AND vehicleNo = :vehicle) OR (:phone != '' AND phone = :phone) ORDER BY date DESC LIMIT 1")
+    @Query("SELECT * FROM bills WHERE kind = 0 AND ((:vehicle != '' AND vehicleNo = :vehicle) OR (:phone != '' AND phone = :phone)) ORDER BY date DESC LIMIT 1")
     suspend fun lastBillOf(vehicle: String, phone: String): Bill?
 
-    @Query("SELECT bi.name AS name, SUM(bi.qty) AS qty, SUM(bi.qty * bi.price) AS amount FROM bill_items bi INNER JOIN bills b ON b.id = bi.billId WHERE b.isEstimate = 0 AND b.date >= :fromTime AND b.date < :toTime GROUP BY bi.name ORDER BY SUM(bi.qty) DESC LIMIT 10")
+    @Query("SELECT bi.name AS name, SUM(bi.qty) AS qty, SUM(bi.qty * bi.price) AS amount FROM bill_items bi INNER JOIN bills b ON b.id = bi.billId WHERE b.kind = 0 AND b.isEstimate = 0 AND b.date >= :fromTime AND b.date < :toTime GROUP BY bi.name ORDER BY SUM(bi.qty) DESC LIMIT 10")
     fun topSellers(fromTime: Long, toTime: Long): Flow<List<TopSeller>>
 
-    @Query("SELECT bi.partId FROM bill_items bi INNER JOIN bills b ON b.id = bi.billId WHERE bi.partId IS NOT NULL AND b.isEstimate = 0 GROUP BY bi.partId ORDER BY SUM(bi.qty) DESC LIMIT 12")
+    @Query("SELECT bi.partId FROM bill_items bi INNER JOIN bills b ON b.id = bi.billId WHERE bi.partId IS NOT NULL AND b.kind = 0 AND b.isEstimate = 0 GROUP BY bi.partId ORDER BY SUM(bi.qty) DESC LIMIT 12")
     fun frequentPartIds(): Flow<List<Long>>
+
+    @Query("SELECT b.id AS id, b.date AS date, b.customer AS vendor, bi.qty AS qty, bi.price AS rate FROM bill_items bi INNER JOIN bills b ON b.id = bi.billId WHERE b.kind = 1 AND bi.partId = :partId ORDER BY b.date DESC LIMIT 20")
+    fun partPurchases(partId: Long): Flow<List<PartPurchase>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun putParts(list: List<Part>)
@@ -170,7 +194,15 @@ interface AppDao {
     suspend fun clearItems()
 }
 
-@Database(entities = [Part::class, Bill::class, BillItem::class], version = 1, exportSchema = false)
+/** Upgrades the old database (version 1) without losing any parts or bills. */
+private val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE bills ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE bills ADD COLUMN ref TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [Part::class, Bill::class, BillItem::class], version = 2, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): AppDao
 
@@ -178,6 +210,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var instance: AppDb? = null
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "mauli_auto_parts.db")
+                .addMigrations(MIGRATION_1_2)
                 .build().also { instance = it }
         }
     }
@@ -185,6 +218,7 @@ abstract class AppDb : RoomDatabase() {
 
 // ---------------- App models ----------------
 
+/** An open (not yet saved) bill. editId != 0 means it is changing a saved bill. */
 data class Draft(
     val id: Long = System.nanoTime(),
     val lines: List<BillItem> = emptyList(),
@@ -196,7 +230,23 @@ data class Draft(
     val discount: String = "",
     val received: String = "",
     val payMode: String = "Cash",
-    val note: String = ""
+    val note: String = "",
+    val editId: Long = 0,
+    val editCode: String = "",
+    val orig: Map<Long, Int> = emptyMap()
+)
+
+/** What the purchase screen sends to be saved. */
+data class PurchaseInput(
+    val vendor: String,
+    val phone: String,
+    val ref: String,
+    val date: Long,
+    val lines: List<BillItem>,
+    val discount: Double,
+    val paid: Double,
+    val payMode: String,
+    val note: String
 )
 
 data class ShopSettings(
@@ -245,7 +295,14 @@ fun num(v: Double): String =
 
 fun normVehicle(v: String): String = v.uppercase().replace(" ", "").replace("-", "")
 
-fun billCode(b: Bill): String = (if (b.isEstimate) "EST-" else "INV-") + b.billNo.toString().padStart(4, '0')
+fun billCode(b: Bill): String {
+    val prefix = when {
+        b.kind == 1 -> "PUR-"
+        b.isEstimate -> "EST-"
+        else -> "INV-"
+    }
+    return prefix + b.billNo.toString().padStart(4, '0')
+}
 
 // ---------------- JSON (backup + saved drafts) ----------------
 
@@ -270,6 +327,7 @@ fun Bill.toJson(): JSONObject = JSONObject().put("id", id).put("billNo", billNo)
     .put("date", date).put("customer", customer).put("phone", phone).put("vehicleNo", vehicleNo)
     .put("model", model).put("km", km).put("subTotal", subTotal).put("discount", discount).put("total", total)
     .put("paid", paid).put("payMode", payMode).put("profit", profit).put("note", note)
+    .put("kind", kind).put("ref", ref)
 
 fun billOf(o: JSONObject) = Bill(
     id = o.optLong("id"), billNo = o.optInt("billNo"), isEstimate = o.optBoolean("isEstimate"),
@@ -277,7 +335,8 @@ fun billOf(o: JSONObject) = Bill(
     vehicleNo = o.optString("vehicleNo"), model = o.optString("model"), km = o.optString("km"),
     subTotal = o.optDouble("subTotal", 0.0), discount = o.optDouble("discount", 0.0),
     total = o.optDouble("total", 0.0), paid = o.optDouble("paid", 0.0), payMode = o.optString("payMode", "Cash"),
-    profit = o.optDouble("profit", 0.0), note = o.optString("note")
+    profit = o.optDouble("profit", 0.0), note = o.optString("note"),
+    kind = o.optInt("kind", 0), ref = o.optString("ref")
 )
 
 fun BillItem.toJson(): JSONObject = JSONObject().put("id", id).put("billId", billId).put("partId", partId ?: -1L)
@@ -309,12 +368,18 @@ fun settingsOf(o: JSONObject): ShopSettings {
 fun Draft.toJson(): JSONObject = JSONObject().put("id", id).put("lines", JSONArray(lines.map { it.toJson() }))
     .put("customer", customer).put("phone", phone).put("vehicleNo", vehicleNo).put("model", model)
     .put("km", km).put("discount", discount).put("received", received).put("payMode", payMode).put("note", note)
+    .put("editId", editId).put("editCode", editCode)
+    .put("orig", JSONObject().also { o -> orig.forEach { (k, v) -> o.put(k.toString(), v) } })
 
 fun draftOf(o: JSONObject) = Draft(
     id = o.optLong("id", System.nanoTime()), lines = o.optJSONArray("lines").mapObjects { itemOf(it) },
     customer = o.optString("customer"), phone = o.optString("phone"), vehicleNo = o.optString("vehicleNo"),
     model = o.optString("model"), km = o.optString("km"), discount = o.optString("discount"),
-    received = o.optString("received"), payMode = o.optString("payMode", "Cash"), note = o.optString("note")
+    received = o.optString("received"), payMode = o.optString("payMode", "Cash"), note = o.optString("note"),
+    editId = o.optLong("editId", 0L), editCode = o.optString("editCode"),
+    orig = o.optJSONObject("orig")?.let { j ->
+        j.keys().asSequence().mapNotNull { k -> k.toLongOrNull()?.let { it to j.optInt(k) } }.toMap()
+    } ?: emptyMap()
 )
 
 // ---------------- Excel (CSV) ----------------
