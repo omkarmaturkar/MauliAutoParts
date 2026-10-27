@@ -22,6 +22,9 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 
+/** Shop owner's name, printed on every bill. Change it here if needed (use "" to hide it). */
+const val SHOP_OWNER = "Sachin Tondhre"
+
 // ================= Shared invoice helpers =================
 
 /** Indian number format with 2 decimals: 1,23,456.50 */
@@ -225,6 +228,10 @@ object Invoice {
         var y = top + 21f
         c.drawText(fit(shop.uppercase(Locale.US), pen(17f, true), R - L - 20f), mid, y, pen(17f, true, Paint.Align.CENTER))
         y += 14f
+        if (SHOP_OWNER.isNotBlank()) {
+            c.drawText(fit("Prop. $SHOP_OWNER", pen(9.5f, true), R - L - 20f), mid, y, pen(9.5f, true, Paint.Align.CENTER))
+            y += 12.5f
+        }
         if (s.tagline.isNotBlank()) {
             c.drawText(fit(s.tagline, pen(9f), R - L - 20f), mid, y, pen(9f, false, Paint.Align.CENTER))
             y += 12f
@@ -507,6 +514,12 @@ object Invoice {
                     fit("for " + shop.uppercase(Locale.US), pen(9.5f, true), R - SPLIT - 12f),
                     R - 6f, fTop + 14f, pen(9.5f, true, Paint.Align.RIGHT)
                 )
+                if (SHOP_OWNER.isNotBlank()) {
+                    c.drawText(
+                        fit("$SHOP_OWNER (Proprietor)", pen(8.5f, true), R - SPLIT - 12f),
+                        R - 6f, B - 19f, pen(8.5f, true, Paint.Align.RIGHT)
+                    )
+                }
                 c.drawText("Authorised Signatory", R - 6f, B - 7f, pen(8.5f, false, Paint.Align.RIGHT))
             } else {
                 c.drawText("Continued on next page...", R - 6f, B - 6f, pen(8f, false, Paint.Align.RIGHT))
@@ -541,6 +554,7 @@ object Invoice {
         e.cmd(0x1B, 0x40).center().bold(true)
         if (shop.length <= w / 2) e.size(0x11).line(shop) else e.size(0x01).wrap(shop)
         e.size(0x00).bold(false)
+        if (SHOP_OWNER.isNotBlank()) e.wrap("Prop. $SHOP_OWNER")
         if (s.tagline.isNotBlank()) e.wrap(s.tagline)
         if (s.address.isNotBlank()) e.wrap(s.address.replace("\n", " "))
         if (s.phone.isNotBlank()) e.line("Ph: ${s.phone}")
