@@ -505,6 +505,7 @@ fun InvoicePaper(b: Bill, items: List<BillItem>, s: ShopSettings, parts: Map<Lon
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             PText(shop.uppercase(Locale.US), size = 17, bold = true, align = TextAlign.Center)
+            if (SHOP_OWNER.isNotBlank()) PText("Prop. $SHOP_OWNER", size = 10, bold = true, align = TextAlign.Center)
             if (s.tagline.isNotBlank()) PText(s.tagline, size = 10, align = TextAlign.Center)
             if (s.address.isNotBlank()) PText(s.address, size = 10, align = TextAlign.Center)
             val contact = listOfNotNull(
@@ -663,17 +664,20 @@ fun InvoicePaper(b: Bill, items: List<BillItem>, s: ShopSettings, parts: Map<Lon
         HRule()
 
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            Column(Modifier.weight(1.15f).padding(6.dp)) {
+            Column(Modifier.weight(1.15f).fillMaxHeight().padding(6.dp)) {
                 PText("Terms & Conditions", size = 9, bold = true)
                 PText("E.& O.E.", size = 9)
                 if (s.footer.isNotBlank()) PText(s.footer, size = 9)
                 Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.weight(1f))
                 PText("Receiver's Signature", size = 9)
             }
             VRule()
-            Column(Modifier.weight(1f).padding(6.dp), horizontalAlignment = Alignment.End) {
+            Column(Modifier.weight(1f).fillMaxHeight().padding(6.dp), horizontalAlignment = Alignment.End) {
                 PText("for ${shop.uppercase(Locale.US)}", size = 9, bold = true, align = TextAlign.End)
                 Spacer(Modifier.height(36.dp))
+                Spacer(Modifier.weight(1f))
+                if (SHOP_OWNER.isNotBlank()) PText("$SHOP_OWNER (Proprietor)", size = 9, bold = true, align = TextAlign.End)
                 PText("Authorised Signatory", size = 9, align = TextAlign.End)
             }
         }
