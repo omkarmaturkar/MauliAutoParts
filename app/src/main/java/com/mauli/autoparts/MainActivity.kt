@@ -41,8 +41,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Dashboard
-import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.PointOfSale
 import androidx.compose.material.icons.rounded.Receipt
 import androidx.compose.material3.Icon
@@ -90,7 +90,7 @@ class MainActivity : ComponentActivity() {
 /** Screens that open on top of the main tabs (no bottom menu). */
 private fun Screen.isLeaf(): Boolean =
     this is Screen.EditPart || this is Screen.BillView || this is Screen.PurchaseEdit ||
-        this == Screen.Settings || this == Screen.Purchases
+        this == Screen.Settings || this == Screen.Purchases || this is LeafScreen
 
 @Composable
 fun MauliApp(vm: AppViewModel) {
@@ -148,11 +148,14 @@ private fun AppBody(vm: AppViewModel) {
                     Screen.Billing -> holder.SaveableStateProvider("billing") { BillingScreen(vm) }
                     Screen.Bills -> holder.SaveableStateProvider("bills") { BillsScreen(vm) }
                     Screen.Reports -> holder.SaveableStateProvider("reports") { ReportsScreen(vm) }
+                    MenuPage -> holder.SaveableStateProvider("menu") { MenuScreen(vm) }
                     Screen.Settings -> SettingsScreen(vm)
                     Screen.Purchases -> PurchasesScreen(vm)
+                    VehiclesPage -> VehicleListScreen(vm)
                     is Screen.EditPart -> EditPartScreen(vm, s.id)
                     is Screen.BillView -> BillViewScreen(vm, s.id)
                     is Screen.PurchaseEdit -> PurchaseEditScreen(vm, s.id)
+                    is VehiclePage -> VehicleDetailScreen(vm, s.key)
                 }
             }
         }
@@ -181,7 +184,7 @@ private fun BottomBar(current: Screen, openBills: Int, onSelect: (Screen) -> Uni
             NavItem(Icons.Rounded.Inventory2, "Stock", current == Screen.Stock) { onSelect(Screen.Stock) }
             BillButton(current == Screen.Billing, openBills) { onSelect(Screen.Billing) }
             NavItem(Icons.Rounded.Receipt, "Bills", current == Screen.Bills) { onSelect(Screen.Bills) }
-            NavItem(Icons.Rounded.Insights, "Reports", current == Screen.Reports) { onSelect(Screen.Reports) }
+            NavItem(Icons.Rounded.Menu, "Menu", current == MenuPage || current == Screen.Reports) { onSelect(MenuPage) }
         }
     }
 }
