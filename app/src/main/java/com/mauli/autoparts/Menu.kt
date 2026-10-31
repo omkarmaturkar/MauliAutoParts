@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.PointOfSale
 import androidx.compose.material.icons.rounded.Receipt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Store
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -122,6 +123,9 @@ fun MenuScreen(vm: AppViewModel) {
             Icons.Rounded.LocalShipping, Teal, "Purchases", "Stock in from your vendors",
             badge = if (payable > 0.009) "Pay " + rs(payable) else null, badgeColor = Red
         ) { vm.open(Screen.Purchases) },
+        MenuEntry(Icons.Rounded.Store, Sky, "Vendors", "Every vendor and all their bills") {
+            vm.open(VendorsPage)
+        },
         MenuEntry(Icons.Rounded.Share, Purple, "Send order list", "Share the low stock list on WhatsApp") {
             if (low == 0) vm.toast("No parts are running low 👍") else Printer.shareText(context, vm.orderListText())
         }
@@ -200,17 +204,17 @@ fun QuickMenu(vm: AppViewModel, lowCount: Int, modifier: Modifier = Modifier) {
             vm.tab(Screen.Stock)
         },
         TileSpec(Icons.Rounded.LocalShipping, "Purchases", Teal) { vm.open(Screen.Purchases) },
+        TileSpec(Icons.Rounded.Store, "Vendors", Sky) { vm.open(VendorsPage) },
         TileSpec(Icons.Rounded.Warning, "Low stock", Amber, badge = lowCount, badgeColor = Red) {
             vm.stockFilter = "Low"
             vm.tab(Screen.Stock)
         },
         TileSpec(Icons.Rounded.Motorcycle, "Vehicles", Purple) { vm.open(VehiclesPage) },
-        TileSpec(Icons.Rounded.Receipt, "Bills", Sky) {
+        TileSpec(Icons.Rounded.Receipt, "Bills", Navy) {
             vm.billFilter = "All"
             vm.tab(Screen.Bills)
         },
         TileSpec(Icons.Rounded.Insights, "Reports", Green) { vm.tab(Screen.Reports) },
-        TileSpec(Icons.Rounded.Settings, "Settings", Muted) { vm.open(Screen.Settings) },
         TileSpec(Icons.Rounded.Menu, "Menu", Orange) { vm.tab(MenuPage) }
     )
     Column(modifier) {
