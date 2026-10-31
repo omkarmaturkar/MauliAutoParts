@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.AddBox
+import androidx.compose.material.icons.rounded.Assignment
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Inventory2
@@ -37,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,11 +83,17 @@ fun MenuScreen(vm: AppViewModel) {
     val parts by vm.parts.collectAsState()
     val bills by vm.bills.collectAsState()
     val purchases by vm.purchases.collectAsState()
+    val jobs by remember { vm.dao.jobCardsFlow() }.collectAsState(initial = emptyList())
     val low = parts.count { it.qty <= it.minQty }
     val udhaar = bills.sumOf { it.due }
     val payable = purchases.sumOf { it.due }
+    val openJobs = jobs.count { it.jobOpen }
 
     val work = listOf(
+        MenuEntry(
+            Icons.Rounded.Assignment, Purple, "Job cards", "Vehicles in the shop and their work",
+            badge = if (openJobs > 0) "$openJobs open" else null, badgeColor = Purple
+        ) { vm.open(JobCardsPage) },
         MenuEntry(Icons.Rounded.PointOfSale, Orange, "New bill", "Start billing a customer") { startNewBill(vm) },
         MenuEntry(Icons.Rounded.Receipt, Navy, "All bills", "${bills.size} saved bills and estimates") {
             vm.billFilter = "All"
@@ -98,7 +106,7 @@ fun MenuScreen(vm: AppViewModel) {
             vm.billFilter = "Udhaar"
             vm.tab(Screen.Bills)
         },
-        MenuEntry(Icons.Rounded.Motorcycle, Purple, "Vehicle history", "Every visit of every vehicle") {
+        MenuEntry(Icons.Rounded.Motorcycle, Pink, "Vehicle history", "Every visit of every vehicle") {
             vm.open(VehiclesPage)
         }
     )
@@ -198,7 +206,12 @@ private fun MenuItemRow(e: MenuEntry) {
 /** Big shortcut buttons for the Home screen (the same sections as the Menu tab). */
 @Composable
 fun QuickMenu(vm: AppViewModel, lowCount: Int, modifier: Modifier = Modifier) {
+    val jobs by remember { vm.dao.jobCardsFlow() }.collectAsState(initial = emptyList())
+    val openJobs = jobs.count { it.jobOpen }
     val tiles = listOf(
+        TileSpec(Icons.Rounded.Assignment, "Job cards", Purple, badge = openJobs, badgeColor = Purple) {
+            vm.open(JobCardsPage)
+        },
         TileSpec(Icons.Rounded.Inventory2, "Stock", Navy) {
             vm.stockFilter = "All"
             vm.tab(Screen.Stock)
@@ -209,11 +222,7 @@ fun QuickMenu(vm: AppViewModel, lowCount: Int, modifier: Modifier = Modifier) {
             vm.stockFilter = "Low"
             vm.tab(Screen.Stock)
         },
-        TileSpec(Icons.Rounded.Motorcycle, "Vehicles", Purple) { vm.open(VehiclesPage) },
-        TileSpec(Icons.Rounded.Receipt, "Bills", Navy) {
-            vm.billFilter = "All"
-            vm.tab(Screen.Bills)
-        },
+        TileSpec(Icons.Rounded.Motorcycle, "Vehicles", Pink) { vm.open(VehiclesPage) },
         TileSpec(Icons.Rounded.Insights, "Reports", Green) { vm.tab(Screen.Reports) },
         TileSpec(Icons.Rounded.Menu, "Menu", Orange) { vm.tab(MenuPage) }
     )
