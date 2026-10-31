@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,14 +33,12 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Category
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.FlashOn
-import androidx.compose.material.icons.rounded.LocalShipping
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Opacity
 import androidx.compose.material.icons.rounded.RadioButtonChecked
@@ -185,216 +182,3 @@ fun StockScreen(vm: AppViewModel) {
                                 exporter.launch("Mauli_Stock_" + SimpleDateFormat("dd-MM-yyyy", Locale.US).format(Date()) + ".csv")
                             }
                         )
-                        DropdownMenuItem(
-                            text = { Text("Send order list") },
-                            leadingIcon = { Icon(Icons.Rounded.Receipt, null, tint = Purple) },
-                            onClick = {
-                                menu = false
-                                if (parts.none { it.qty <= it.minQty }) vm.toast("No parts are running low 👍")
-                                else Printer.shareText(context, vm.orderListText())
-                            }
-                        )
-                    }
-                }
-            },
-            bottom = {
-                SearchBox(query, { query = it }, "Search name, part no, vehicle, rack…")
-                Spacer(Modifier.height(10.dp))
-                ChipRow(filters, filter, { vm.stockFilter = it }, onDark = true, label = { "$it (${counts[it] ?: 0})" })
-            }
-        )
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                parts.isEmpty() -> Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    EmptyState(
-                        Icons.Rounded.Category, "No parts yet",
-                        "Add parts one by one, or import your full stock from an Excel sheet in one go.",
-                        action = "Add first part"
-                    ) { vm.open(Screen.EditPart(0)) }
-                    LightButton("Import from Excel", icon = Icons.Rounded.FileUpload, color = Green) { importInfo = true }
-                }
-                shown.isEmpty() -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    EmptyState(
-                        Icons.Rounded.Search, "No parts found",
-                        if (query.isBlank()) "Nothing in this list right now." else "Nothing matches \"${query.trim()}\".",
-                        action = if (query.isBlank()) null else "Add \"${query.trim()}\" as new part"
-                    ) {
-                        pendingPartName = query.trim()
-                        vm.open(Screen.EditPart(0))
-                    }
-                }
-                else -> LazyColumn(
-                    Modifier.fillMaxSize(),
-                    state = listState,
-                    contentPadding = PaddingValues(
-                        start = 16.dp, end = 16.dp, top = 14.dp,
-                        bottom = if (draft.lines.isNotEmpty()) 100.dp else 36.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(shown, key = { it.id }) { p ->
-                        PartCard(
-                            p = p,
-                            inBill = inBill[p.id] ?: 0,
-                            reserved = reserved[p.id] ?: 0,
-                            onOpen = { vm.open(Screen.EditPart(p.id)) },
-                            onStock = { stockFor = p },
-                            onBill = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                vm.addToBill(p)
-                            }
-                        )
-                    }
-                }
-            }
-            if (draft.lines.isNotEmpty()) BillBar(vm, draft, Modifier.align(Alignment.BottomCenter))
-        }
-    }
-
-    stockFor?.let { p -> AddStockDialog(vm, p) { stockFor = null } }
-    if (importInfo) {
-        ImportDialog(
-            onSample = {
-                importInfo = false
-                shareSample(context)
-            },
-            onChoose = {
-                importInfo = false
-                importer.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel"))
-            },
-            onDismiss = { importInfo = false }
-        )
-    }
-}
-
-/**
- * Quick "stock received" box. With a vendor name it is saved as a purchase (vendor history).
- * A vendor discount % can be added: the part's buy price becomes the discounted price.
- */
-@Composable
-fun AddStockDialog(vm: AppViewModel, p: Part, onDismiss: () -> Unit) {
-    val purchases by vm.purchases.collectAsState()
-    var qty by remember { mutableStateOf("") }
-    var rate by remember { mutableStateOf(if (p.buyPrice > 0) num(p.buyPrice) else "") }
-    var disc by remember { mutableStateOf("") }
-    var vendor by remember { mutableStateOf(p.supplier) }
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(200)
-        try {
-            focus.requestFocus()
-        } catch (e: Exception) {
-        }
-    }
-    val vendors = remember(purchases) {
-        purchases.map { it.customer.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }.take(8)
-    }
-    val pct = disc.toNum().coerceIn(0.0, 100.0)
-    val listRate = rate.toNum()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color.White,
-        shape = RoundedCornerShape(24.dp),
-        title = { Text("Add stock", color = Ink, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(p.name, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text("Now in stock: ${p.qty} ${p.unit}", color = Muted, fontSize = 13.sp)
-                Spacer(Modifier.height(14.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AppField(
-                        qty, { qty = it.filter { c -> c.isDigit() }.take(6) }, "Qty received",
-                        Modifier.weight(1f).focusRequester(focus), type = KeyboardType.Number
-                    )
-                    AppField(
-                        rate, { rate = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Buy rate",
-                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ "
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                AppField(
-                    disc, { disc = it.filter { c -> c.isDigit() || c == '.' }.take(5) }, "Vendor discount % (if any)",
-                    type = KeyboardType.Decimal, suffix = "%"
-                )
-                if (pct > 0.0 && listRate > 0.0) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "You pay ${rs(netRate(listRate, pct))} each",
-                        color = Green, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                AppField(vendor, { vendor = it }, "Vendor / supplier", imeAction = ImeAction.Done)
-                PickChips(vendors.filter { !it.equals(vendor.trim(), true) }) { vendor = it }
-                val q = qty.toIntOrNull() ?: 0
-                if (q > 0) {
-                    Spacer(Modifier.height(10.dp))
-                    Text("Stock will become ${p.qty + q} ${p.unit}", color = Green, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                }
-                if (vendor.isBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text("Add the vendor name to keep a purchase record.", color = Faint, fontSize = 12.sp)
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val q = qty.toIntOrNull() ?: 0
-                    val list = rate.toNum()
-                    val pc = disc.toNum().coerceIn(0.0, 100.0)
-                    val r = netRate(list, pc)
-                    if (q <= 0) {
-                        vm.toast("Enter quantity")
-                    } else {
-                        if (vendor.isNotBlank()) {
-                            vm.savePurchase(
-                                0L,
-                                PurchaseInput(
-                                    vendor = vendor.trim(), phone = "", ref = "", date = now(),
-                                    lines = listOf(
-                                        BillItem(
-                                            id = System.nanoTime(), partId = p.id, name = p.name, partNo = p.partNo,
-                                            qty = q, price = r, buyPrice = r, gst = p.gst, listPrice = list, discPct = pc
-                                        )
-                                    ),
-                                    discount = 0.0, paid = q * r, payMode = "Cash", note = ""
-                                )
-                            ) { }
-                        } else {
-                            vm.addStock(p, q, r.takeIf { it > 0 })
-                        }
-                        onDismiss()
-                    }
-                },
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Navy)
-            ) { Text("Add", fontWeight = FontWeight.Bold) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } }
-    )
-}
-
-@Composable
-private fun PartCard(p: Part, inBill: Int, reserved: Int, onOpen: () -> Unit, onStock: () -> Unit, onBill: () -> Unit) {
-    val avail = p.qty - reserved
-    val color = when {
-        avail <= 0 -> Red
-        avail <= p.minQty -> Amber
-        else -> Green
-    }
-    AppCard(Modifier.fillMaxWidth(), onClick = onOpen, padding = 12.dp) {
-        Row {
-            IconBadge(categoryIcon(p.category), tagColor(p.category), 46.dp)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(p.name, color = Ink, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val info = listOf(p.partNo, p.brand, p.vehicle, if (p.rack.isNotBlank()) "Rack ${p.rack}" else "")
-                    .filter { it.isNotBlank() }.joinToString("  •  ")
-                if (info.isNotEmpty()) {
-                    Text(info, color = Muted, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
