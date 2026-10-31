@@ -227,6 +227,9 @@ fun HomeScreen(vm: AppViewModel) {
                     }
                 }
             }
+            item(key = "menu") {
+                QuickMenu(vm, st.low.size, Modifier.padding(horizontal = 16.dp))
+            }
             if (!hideSetup && steps.any { !it.done }) {
                 item(key = "setup") {
                     SetupCard(steps) {
