@@ -154,6 +154,7 @@ private fun AppBody(vm: AppViewModel) {
                     VehiclesPage -> VehicleListScreen(vm)
                     VendorsPage -> VendorListScreen(vm)
                     JobCardsPage -> JobCardsScreen(vm)
+                    ImportPage -> ImportScreen(vm)
                     is Screen.EditPart -> EditPartScreen(vm, s.id)
                     is Screen.BillView -> BillViewScreen(vm, s.id)
                     is Screen.PurchaseEdit -> PurchaseEditScreen(vm, s.id)
