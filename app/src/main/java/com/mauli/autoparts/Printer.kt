@@ -225,8 +225,9 @@ object Printer {
         else -> "INVOICE"
     }
 
+        /** The QR goes on every bill, unless the shop switched it off for this one. */
     fun showUpiQr(b: Bill, s: ShopSettings): Boolean =
-        s.upi.isNotBlank() && !b.isEstimate && (b.payMode == "UPI" || b.total - b.paid > 0.009)
+        s.upi.isNotBlank() && !b.noQr && b.total > 0.009
 
     // ---------- Bluetooth ----------
 
