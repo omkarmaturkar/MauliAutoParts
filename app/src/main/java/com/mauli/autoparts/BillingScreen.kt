@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.AddCircle
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Motorcycle
@@ -200,9 +201,10 @@ fun BillingScreen(vm: AppViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
-            title = if (editing) "Edit ${d.editCode}" else "Billing",
+            title = if (editing) "Edit ${d.editCode}" else if (d.estimate) "New Estimate" else "Billing",
             subtitle = when {
                 editing -> "Changes update the saved bill and its stock"
+                d.estimate -> "Estimate  •  stock will not change"
                 vm.drafts.size > 1 -> "${vm.drafts.size} bills open  •  tap to switch"
                 else -> "Today  •  ${fmtDate(now())}"
             },
@@ -278,6 +280,9 @@ fun BillingScreen(vm: AppViewModel) {
                 ) {
                     if (editing) {
                         item(key = "edit") { EditBanner(d.editCode) { askDiscard = true } }
+                    }
+                    if (d.estimate && !editing) {
+                        item(key = "est") { EstimateBanner() }
                     }
                     item(key = "vehicle") {
                         VehicleStrip(vm, d, history) { last ->
@@ -356,6 +361,10 @@ fun BillingScreen(vm: AppViewModel) {
                         EditBanner(d.editCode) { askDiscard = true }
                         Spacer(Modifier.height(12.dp))
                     }
+                    if (d.estimate && !editing) {
+                        EstimateBanner()
+                        Spacer(Modifier.height(12.dp))
+                    }
                     ItemsCard(
                         d = d,
                         partsById = partsById,
@@ -370,9 +379,10 @@ fun BillingScreen(vm: AppViewModel) {
                     CustomerCard(vm, d, history)
                     if (d.lines.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
-                        PaymentCard(vm, d, t, s) {
-                            if (s.upi.isBlank()) vm.toast("Add your UPI ID in Settings first") else showQr = true
-                        }
+                        PaymentCard(
+                            vm, d, t, s,
+                            onQr = { if (s.upi.isBlank()) vm.toast("Add your UPI ID in Settings first") else showQr = true }
+                        )
                     }
                 }
             }
@@ -408,6 +418,11 @@ fun BillingScreen(vm: AppViewModel) {
                         LightButton("Update", color = Purple) { save(true) }
                         Spacer(Modifier.width(8.dp))
                         MainButton("Save as Bill", color = Orange) { save(false) }
+                    }
+                    d.estimate -> {
+                        LightButton("Make it a bill", color = Orange) { save(false) }
+                        Spacer(Modifier.width(8.dp))
+                        MainButton("Save Estimate", color = Purple) { save(true) }
                     }
                     else -> {
                         LightButton("Estimate", color = Purple) { save(true) }
@@ -724,6 +739,30 @@ private fun EditBanner(code: String, onCancel: () -> Unit) {
     }
 }
 
+/** Shown while making an estimate, so it is never mistaken for a real bill. */
+@Composable
+private fun EstimateBanner() {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Purple.copy(alpha = 0.08f))
+            .border(1.dp, Purple.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconBadge(Icons.Rounded.Description, Purple, 36.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Making an estimate", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Stock will not change. If the customer agrees, open it later and tap Convert to Bill.",
+                color = Muted, fontSize = 12.sp
+            )
+        }
+    }
+}
+
 /** Open bills as tabs: tap to switch customer, + New bill for the next one. */
 @Composable
 private fun BillTabs(vm: AppViewModel, onNew: () -> Unit) {
@@ -740,10 +779,12 @@ private fun BillTabs(vm: AppViewModel, onNew: () -> Unit) {
                 d.customer.isNotBlank() -> d.customer
                 d.vehicleNo.isNotBlank() -> vehicleLabel(d.vehicleNo)
                 d.editId != 0L -> d.editCode
+                d.estimate -> "Estimate"
                 else -> "Bill ${i + 1}"
             }
             val sub = when {
                 d.editId != 0L -> "Editing • ${rs(total)}"
+                d.estimate && d.lines.isEmpty() -> "Estimate"
                 d.lines.isEmpty() -> "Empty"
                 else -> rs(total)
             }
@@ -763,7 +804,7 @@ private fun BillTabs(vm: AppViewModel, onNew: () -> Unit) {
                 )
                 Text(
                     sub,
-                    color = if (on) Orange else Color.White.copy(alpha = 0.7f),
+                    color = if (on) (if (d.estimate) Purple else Orange) else Color.White.copy(alpha = 0.7f),
                     fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
                 )
             }
@@ -1029,9 +1070,19 @@ private fun PaymentCard(vm: AppViewModel, d: Draft, t: Totals, s: ShopSettings, 
             Spacer(Modifier.height(6.dp))
             Text("${rs(t.total - received)} will be added to udhaar", color = Red, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
         }
-        if (d.payMode == "UPI") {
-            Spacer(Modifier.height(10.dp))
-            LightButton("Show UPI QR to customer", Modifier.fillMaxWidth(), icon = Icons.Rounded.QrCode, color = Navy, onClick = onQr)
+        Spacer(Modifier.height(10.dp))
+        SwitchRow(
+            "Print UPI QR on this bill",
+            if (s.upi.isBlank()) "Add your UPI ID in Settings first"
+            else "Customer can scan and pay  •  ${s.upi}",
+            d.showQr && s.upi.isNotBlank()
+        ) { on ->
+            if (s.upi.isBlank()) vm.toast("Add your UPI ID in Settings first")
+            else vm.editDraft { it.copy(showQr = on) }
+        }
+        if (d.showQr && s.upi.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            LightButton("Show UPI QR to customer now", Modifier.fillMaxWidth(), icon = Icons.Rounded.QrCode, color = Navy, onClick = onQr)
         }
         Spacer(Modifier.height(12.dp))
         AppField(
