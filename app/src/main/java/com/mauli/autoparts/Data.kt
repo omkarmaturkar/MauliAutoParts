@@ -71,6 +71,12 @@ data class Bill(
     val ref: String = ""
 )
 
+/**
+ * One line of a bill.
+ * For purchase lines: listPrice = the vendor's rate before discount, discPct = discount % given on it,
+ * price (and buyPrice) = the rate you really pay after the discount.
+ * Sale lines leave listPrice and discPct at 0.
+ */
 @Entity(tableName = "bill_items", indices = [Index("billId"), Index("partId")])
 data class BillItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -81,7 +87,9 @@ data class BillItem(
     val qty: Int = 1,
     val price: Double = 0.0,
     val buyPrice: Double = 0.0,
-    val gst: Double = 0.0
+    val gst: Double = 0.0,
+    val listPrice: Double = 0.0,
+    val discPct: Double = 0.0
 )
 
 data class TopSeller(val name: String, val qty: Int, val amount: Double)
@@ -202,7 +210,15 @@ private val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [Part::class, Bill::class, BillItem::class], version = 2, exportSchema = false)
+/** Version 3: purchase lines remember the vendor's list rate and the discount % given on it. */
+private val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE bill_items ADD COLUMN listPrice REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE bill_items ADD COLUMN discPct REAL NOT NULL DEFAULT 0")
+    }
+}
+
+@Database(entities = [Part::class, Bill::class, BillItem::class], version = 3, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): AppDao
 
@@ -210,7 +226,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var instance: AppDb? = null
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "mauli_auto_parts.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build().also { instance = it }
         }
     }
@@ -304,6 +320,13 @@ fun billCode(b: Bill): String {
     return prefix + b.billNo.toString().padStart(4, '0')
 }
 
+/** Rate after a vendor discount, rounded to paise: 100 at 10% -> 90. */
+fun netRate(list: Double, pct: Double): Double =
+    Math.round(list * (1.0 - pct.coerceIn(0.0, 100.0) / 100.0) * 100.0) / 100.0
+
+/** The vendor's rate before discount for a purchase line (older lines had no discount). */
+val BillItem.listRate: Double get() = if (listPrice > 0.0) listPrice else price
+
 // ---------------- JSON (backup + saved drafts) ----------------
 
 fun <T> JSONArray?.mapObjects(f: (JSONObject) -> T): List<T> =
@@ -341,12 +364,13 @@ fun billOf(o: JSONObject) = Bill(
 
 fun BillItem.toJson(): JSONObject = JSONObject().put("id", id).put("billId", billId).put("partId", partId ?: -1L)
     .put("name", name).put("partNo", partNo).put("qty", qty).put("price", price)
-    .put("buyPrice", buyPrice).put("gst", gst)
+    .put("buyPrice", buyPrice).put("gst", gst).put("listPrice", listPrice).put("discPct", discPct)
 
 fun itemOf(o: JSONObject) = BillItem(
     id = o.optLong("id"), billId = o.optLong("billId"), partId = o.optLong("partId", -1L).takeIf { it > 0 },
     name = o.optString("name"), partNo = o.optString("partNo"), qty = o.optInt("qty", 1),
-    price = o.optDouble("price", 0.0), buyPrice = o.optDouble("buyPrice", 0.0), gst = o.optDouble("gst", 0.0)
+    price = o.optDouble("price", 0.0), buyPrice = o.optDouble("buyPrice", 0.0), gst = o.optDouble("gst", 0.0),
+    listPrice = o.optDouble("listPrice", 0.0), discPct = o.optDouble("discPct", 0.0)
 )
 
 fun ShopSettings.toJson(): JSONObject = JSONObject().put("shopName", shopName).put("tagline", tagline)
