@@ -54,6 +54,8 @@ data class Part(
  *          payMode = mechanic, total = estimate given, paid = advance received.
  * Hidden rows (kind 2, 3, 4) use negative ids so they never clash with real bills. All kinds are
  * inside every backup, because a backup saves all rows of this table.
+ *
+ * noQr = the shop turned the UPI QR off for this one bill.
  */
 @Entity(tableName = "bills", indices = [Index("date"), Index("vehicleNo"), Index("phone")])
 data class Bill(
@@ -74,7 +76,8 @@ data class Bill(
     val profit: Double = 0.0,
     val note: String = "",
     val kind: Int = 0,
-    val ref: String = ""
+    val ref: String = "",
+    val noQr: Boolean = false
 )
 
 /**
@@ -235,7 +238,14 @@ private val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-@Database(entities = [Part::class, Bill::class, BillItem::class], version = 3, exportSchema = false)
+/** Version 4: a bill can have its UPI QR switched off. */
+private val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE bills ADD COLUMN noQr INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+@Database(entities = [Part::class, Bill::class, BillItem::class], version = 4, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): AppDao
 
@@ -243,7 +253,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var instance: AppDb? = null
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "mauli_auto_parts.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build().also { instance = it }
         }
     }
@@ -266,7 +276,9 @@ data class Draft(
     val note: String = "",
     val editId: Long = 0,
     val editCode: String = "",
-    val orig: Map<Long, Int> = emptyMap()
+    val orig: Map<Long, Int> = emptyMap(),
+    val showQr: Boolean = true,
+    val estimate: Boolean = false
 )
 
 /** What the purchase screen sends to be saved. */
@@ -284,7 +296,7 @@ data class PurchaseInput(
 
 data class ShopSettings(
     val shopName: String = "Mauli Auto Parts",
-    val tagline: String = "Two & Four Wheeler Spare Parts",
+    val tagline: String = "Two Wheeler Spare Parts",
     val address: String = "",
     val phone: String = "",
     val gstin: String = "",
@@ -368,7 +380,7 @@ fun Bill.toJson(): JSONObject = JSONObject().put("id", id).put("billNo", billNo)
     .put("date", date).put("customer", customer).put("phone", phone).put("vehicleNo", vehicleNo)
     .put("model", model).put("km", km).put("subTotal", subTotal).put("discount", discount).put("total", total)
     .put("paid", paid).put("payMode", payMode).put("profit", profit).put("note", note)
-    .put("kind", kind).put("ref", ref)
+    .put("kind", kind).put("ref", ref).put("noQr", noQr)
 
 fun billOf(o: JSONObject) = Bill(
     id = o.optLong("id"), billNo = o.optInt("billNo"), isEstimate = o.optBoolean("isEstimate"),
@@ -377,7 +389,7 @@ fun billOf(o: JSONObject) = Bill(
     subTotal = o.optDouble("subTotal", 0.0), discount = o.optDouble("discount", 0.0),
     total = o.optDouble("total", 0.0), paid = o.optDouble("paid", 0.0), payMode = o.optString("payMode", "Cash"),
     profit = o.optDouble("profit", 0.0), note = o.optString("note"),
-    kind = o.optInt("kind", 0), ref = o.optString("ref")
+    kind = o.optInt("kind", 0), ref = o.optString("ref"), noQr = o.optBoolean("noQr", false)
 )
 
 fun BillItem.toJson(): JSONObject = JSONObject().put("id", id).put("billId", billId).put("partId", partId ?: -1L)
@@ -410,7 +422,7 @@ fun settingsOf(o: JSONObject): ShopSettings {
 fun Draft.toJson(): JSONObject = JSONObject().put("id", id).put("lines", JSONArray(lines.map { it.toJson() }))
     .put("customer", customer).put("phone", phone).put("vehicleNo", vehicleNo).put("model", model)
     .put("km", km).put("discount", discount).put("received", received).put("payMode", payMode).put("note", note)
-    .put("editId", editId).put("editCode", editCode)
+    .put("editId", editId).put("editCode", editCode).put("showQr", showQr).put("estimate", estimate)
     .put("orig", JSONObject().also { o -> orig.forEach { (k, v) -> o.put(k.toString(), v) } })
 
 fun draftOf(o: JSONObject) = Draft(
@@ -419,6 +431,7 @@ fun draftOf(o: JSONObject) = Draft(
     model = o.optString("model"), km = o.optString("km"), discount = o.optString("discount"),
     received = o.optString("received"), payMode = o.optString("payMode", "Cash"), note = o.optString("note"),
     editId = o.optLong("editId", 0L), editCode = o.optString("editCode"),
+    showQr = o.optBoolean("showQr", true), estimate = o.optBoolean("estimate", false),
     orig = o.optJSONObject("orig")?.let { j ->
         j.keys().asSequence().mapNotNull { k -> k.toLongOrNull()?.let { it to j.optInt(k) } }.toMap()
     } ?: emptyMap()
