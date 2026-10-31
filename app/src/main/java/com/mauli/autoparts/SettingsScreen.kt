@@ -96,9 +96,6 @@ fun SettingsScreen(vm: AppViewModel) {
             }
         }
     }
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.importCsv(uri)
-    }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         if (uri != null) vm.exportCsv(uri)
     }
@@ -228,8 +225,8 @@ fun SettingsScreen(vm: AppViewModel) {
                 MenuRow(Icons.Rounded.SettingsBackupRestore, Navy, "Restore from backup file", "Works with phone and Google Drive backup files") {
                     askRestore = true
                 }
-                MenuRow(Icons.Rounded.FileUpload, Green, "Import stock from Excel (CSV)", "Add or update many parts at once") {
-                    importLauncher.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel"))
+                MenuRow(Icons.Rounded.FileUpload, Green, "Import stock from Excel", "Bring in hundreds of parts from .xlsx or CSV") {
+                    vm.open(ImportPage)
                 }
                 MenuRow(Icons.Rounded.FileDownload, Purple, "Export stock to Excel (CSV)", "Full stock list with prices") {
                     exportLauncher.launch("Mauli_Stock_$today.csv")
