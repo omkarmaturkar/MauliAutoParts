@@ -48,6 +48,10 @@ data class Part(
  * A saved document.
  * kind 0 = sale bill (an estimate when isEstimate = true)
  * kind 1 = purchase from a vendor: customer = vendor name, phone = vendor phone, ref = vendor's bill no.
+ * kind 2 / 3 = saved services and packages (hidden, see Catalog).
+ * kind 4 = a saved vendor (hidden): customer = name, phone = mobile, ref = GSTIN, note = address.
+ *          Hidden rows use negative ids so they never clash with real bills, and they are
+ *          inside every backup because a backup saves all rows of this table.
  */
 @Entity(tableName = "bills", indices = [Index("date"), Index("vehicleNo"), Index("phone")])
 data class Bill(
@@ -131,6 +135,10 @@ interface AppDao {
 
     @Query("SELECT * FROM bills WHERE kind = 1 ORDER BY date DESC")
     fun purchasesFlow(): Flow<List<Bill>>
+
+    /** Saved vendors (kind 4). Purchases keep working even for vendors that were never saved here. */
+    @Query("SELECT * FROM bills WHERE kind = 4 ORDER BY customer COLLATE NOCASE")
+    fun vendorsFlow(): Flow<List<Bill>>
 
     @Query("SELECT * FROM bills")
     suspend fun allBills(): List<Bill>
