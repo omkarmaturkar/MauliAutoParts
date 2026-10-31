@@ -152,10 +152,12 @@ private fun AppBody(vm: AppViewModel) {
                     Screen.Settings -> SettingsScreen(vm)
                     Screen.Purchases -> PurchasesScreen(vm)
                     VehiclesPage -> VehicleListScreen(vm)
+                    VendorsPage -> VendorListScreen(vm)
                     is Screen.EditPart -> EditPartScreen(vm, s.id)
                     is Screen.BillView -> BillViewScreen(vm, s.id)
                     is Screen.PurchaseEdit -> PurchaseEditScreen(vm, s.id)
                     is VehiclePage -> VehicleDetailScreen(vm, s.key)
+                    is VendorPage -> VendorDetailScreen(vm, s.name)
                 }
             }
         }
