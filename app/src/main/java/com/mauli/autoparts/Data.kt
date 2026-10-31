@@ -50,8 +50,10 @@ data class Part(
  * kind 1 = purchase from a vendor: customer = vendor name, phone = vendor phone, ref = vendor's bill no.
  * kind 2 / 3 = saved services and packages (hidden, see Catalog).
  * kind 4 = a saved vendor (hidden): customer = name, phone = mobile, ref = GSTIN, note = address.
- *          Hidden rows use negative ids so they never clash with real bills, and they are
- *          inside every backup because a backup saves all rows of this table.
+ * kind 5 = a job card (vehicle taken in for work): note = complaint, ref = status,
+ *          payMode = mechanic, total = estimate given, paid = advance received.
+ * Hidden rows (kind 2, 3, 4) use negative ids so they never clash with real bills. All kinds are
+ * inside every backup, because a backup saves all rows of this table.
  */
 @Entity(tableName = "bills", indices = [Index("date"), Index("vehicleNo"), Index("phone")])
 data class Bill(
@@ -139,6 +141,13 @@ interface AppDao {
     /** Saved vendors (kind 4). Purchases keep working even for vendors that were never saved here. */
     @Query("SELECT * FROM bills WHERE kind = 4 ORDER BY customer COLLATE NOCASE")
     fun vendorsFlow(): Flow<List<Bill>>
+
+    /** Job cards (kind 5), newest first. */
+    @Query("SELECT * FROM bills WHERE kind = 5 ORDER BY date DESC")
+    fun jobCardsFlow(): Flow<List<Bill>>
+
+    @Query("SELECT IFNULL(MAX(billNo), 0) + 1 FROM bills WHERE kind = 5")
+    suspend fun nextJobNo(): Int
 
     @Query("SELECT * FROM bills")
     suspend fun allBills(): List<Bill>
@@ -322,6 +331,7 @@ fun normVehicle(v: String): String = v.uppercase().replace(" ", "").replace("-",
 fun billCode(b: Bill): String {
     val prefix = when {
         b.kind == 1 -> "PUR-"
+        b.kind == 5 -> "JC-"
         b.isEstimate -> "EST-"
         else -> "INV-"
     }
