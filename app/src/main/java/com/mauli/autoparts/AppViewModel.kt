@@ -304,7 +304,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 discount = if (b.discount > 0) num(b.discount) else "",
                 received = if (b.payMode == "Udhaar") num(b.paid) else "",
                 payMode = if (b.isEstimate || b.payMode == "-") "Cash" else b.payMode,
-                note = b.note, editId = b.id, editCode = billCode(b), orig = orig
+                note = b.note, editId = b.id, editCode = billCode(b), orig = orig,
+                showQr = !b.noQr, estimate = b.isEstimate
             )
             val blank = drafts.indexOfFirst {
                 it.editId == 0L && it.lines.isEmpty() && it.customer.isBlank() && it.vehicleNo.isBlank() && it.phone.isBlank()
@@ -358,7 +359,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                                 customer = d.customer.trim(), phone = d.phone.trim(), vehicleNo = normVehicle(d.vehicleNo),
                                 model = d.model.trim(), km = d.km.trim(), subTotal = t.sub, discount = t.discount,
                                 total = t.total, paid = paid, payMode = if (estimate) "-" else d.payMode,
-                                profit = t.profit, note = d.note.trim()
+                                profit = t.profit, note = d.note.trim(), noQr = !d.showQr
                             )
                         )
                         old.id
@@ -370,7 +371,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                                 customer = d.customer.trim(), phone = d.phone.trim(), vehicleNo = normVehicle(d.vehicleNo),
                                 model = d.model.trim(), km = d.km.trim(), subTotal = t.sub, discount = t.discount,
                                 total = t.total, paid = paid, payMode = if (estimate) "-" else d.payMode,
-                                profit = t.profit, note = d.note.trim(), kind = 0
+                                profit = t.profit, note = d.note.trim(), kind = 0, noQr = !d.showQr
                             )
                         )
                         dao.insertItems(d.lines.map { it.copy(id = 0, billId = billId) })
