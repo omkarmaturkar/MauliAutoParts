@@ -93,15 +93,15 @@ fun PickChips(values: List<String>, onPick: (String) -> Unit) {
     }
 }
 
-/** Vendors used before (purchases + part suppliers), most used first. */
-private fun vendorList(purchases: List<Bill>, parts: List<Part>, typed: String): List<String> {
+/** Saved vendors and vendors used before (purchases + part suppliers), most used first. */
+private fun vendorList(purchases: List<Bill>, parts: List<Part>, saved: List<String>, typed: String): List<String> {
     val t = typed.trim().lowercase()
     val ranked = (purchases.map { it.customer } + parts.map { it.supplier })
         .map { it.trim() }.filter { it.isNotEmpty() }
         .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }
-        .distinctBy { it.lowercase() }
-    val exact = ranked.any { it.lowercase() == t }
-    return ranked.filter { it.lowercase() != t && (t.isEmpty() || exact || it.lowercase().contains(t)) }.take(10)
+    val pool = (ranked + saved.map { it.trim() }.filter { it.isNotEmpty() }).distinctBy { it.lowercase() }
+    val exact = pool.any { it.lowercase() == t }
+    return pool.filter { it.lowercase() != t && (t.isEmpty() || exact || it.lowercase().contains(t)) }.take(10)
 }
 
 private fun pickParts(parts: List<Part>, query: String): List<Part> {
@@ -143,7 +143,10 @@ fun PurchasesScreen(vm: AppViewModel) {
             title = "Purchases",
             subtitle = "This month ${rs(month)}  •  Payable ${rs(payable)}",
             onBack = { vm.back() },
-            actions = { HeaderAction(Icons.Rounded.Add, "New purchase") { vm.open(Screen.PurchaseEdit(0)) } },
+            actions = {
+                HeaderAction(Icons.Rounded.Store, "Vendors") { vm.open(VendorsPage) }
+                HeaderAction(Icons.Rounded.Add, "New purchase") { vm.open(Screen.PurchaseEdit(0)) }
+            },
             bottom = {
                 SearchBox(query, { query = it }, "Search vendor, bill no…")
                 Spacer(Modifier.height(10.dp))
@@ -166,6 +169,26 @@ fun PurchasesScreen(vm: AppViewModel) {
                 contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                item(key = "vendors") {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Teal.copy(alpha = 0.08f))
+                            .border(1.dp, Teal.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                            .clickable { vm.open(VendorsPage) }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconBadge(Icons.Rounded.Store, Teal, 38.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Vendors", color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                            Text("Tap a vendor to see all its bills and what you owe", color = Muted, fontSize = 12.sp)
+                        }
+                        if (payable > 0.009) Pill(rs(payable), Red)
+                    }
+                }
                 items(shown, key = { it.id }) { b ->
                     PurchaseRow(b) { vm.open(Screen.PurchaseEdit(b.id)) }
                 }
@@ -230,6 +253,7 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
     val context = LocalContext.current
     val parts by vm.parts.collectAsState()
     val purchases by vm.purchases.collectAsState()
+    val savedVendors by remember { vm.dao.vendorsFlow() }.collectAsState(initial = emptyList())
     val isNew = id == 0L
     var loaded by remember { mutableStateOf(isNew) }
     var original by remember { mutableStateOf<Bill?>(null) }
@@ -270,15 +294,28 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
         }
     }
 
+    /** Fills the mobile number from the saved vendor, or from its last purchase. */
+    fun fillPhone(name: String) {
+        if (phone.isNotBlank()) return
+        val fromSaved = savedVendors.firstOrNull { it.customer.trim().equals(name, true) && it.phone.isNotBlank() }
+        val fromBill = purchases.firstOrNull { it.customer.trim().equals(name, true) && it.phone.isNotBlank() }
+        phone = (fromSaved ?: fromBill)?.phone.orEmpty()
+    }
+
     LaunchedEffect(id) {
         if (isNew) {
+            if (pendingVendorName.isNotBlank()) {
+                vendor = pendingVendorName
+                pendingVendorName = ""
+            }
             if (pendingPurchasePartId != 0L) {
                 vm.dao.part(pendingPurchasePartId)?.let { p ->
                     addLine(p)
-                    if (p.supplier.isNotBlank()) vendor = p.supplier
+                    if (vendor.isBlank() && p.supplier.isNotBlank()) vendor = p.supplier
                 }
                 pendingPurchasePartId = 0L
             }
+            if (vendor.isNotBlank()) fillPhone(vendor)
         } else {
             val b = vm.dao.bill(id)
             if (b != null) {
@@ -306,7 +343,9 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
     val payable = (total - paidValue).coerceAtLeast(0.0)
     val partsById = remember(parts) { parts.associateBy { it.id } }
     val results = remember(parts, query) { pickParts(parts, query) }
-    val vendors = remember(purchases, parts, vendor) { vendorList(purchases, parts, vendor) }
+    val vendors = remember(purchases, parts, savedVendors, vendor) {
+        vendorList(purchases, parts, savedVendors.map { it.customer }, vendor)
+    }
     val anyDiscount = lines.any { it.discPct > 0.0 }
 
     fun save() {
@@ -357,9 +396,7 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
                     AppField(vendor, { vendor = it }, "Vendor / supplier name *")
                     PickChips(vendors) { v ->
                         vendor = v
-                        if (phone.isBlank()) {
-                            purchases.firstOrNull { it.customer.equals(v, true) && it.phone.isNotBlank() }?.let { phone = it.phone }
-                        }
+                        fillPhone(v)
                     }
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -386,6 +423,17 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
                         Spacer(Modifier.width(10.dp))
                         Text("Date: ${fmtDate(date)}", Modifier.weight(1f), color = Ink, fontSize = 15.sp)
                         Text("Change", color = Orange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (vendor.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "See all bills of this vendor →",
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { vm.open(VendorPage(vendor.trim())) }
+                                .padding(vertical = 4.dp),
+                            color = Teal, fontSize = 13.sp, fontWeight = FontWeight.Bold
+                        )
                     }
                 }
                 Spacer(Modifier.height(14.dp))
@@ -668,3 +716,69 @@ private fun PurchaseLineDialog(
                     Spacer(Modifier.height(4.dp))
                 }
                 Text("Amount: ${rs(q * net)}", color = Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(q, list, pc)
+                    onDismiss()
+                },
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Navy)
+            ) { Text("Update", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                onRemove()
+                onDismiss()
+            }) { Text("Remove", color = Red, fontWeight = FontWeight.SemiBold) }
+        }
+    )
+}
+
+@Composable
+private fun NewPartDialog(initial: String, onCreate: (String, Double, Double) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    var buy by remember { mutableStateOf("") }
+    var sell by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        shape = RoundedCornerShape(24.dp),
+        title = { Text("New part", color = Ink, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(
+                    "It will be added to your stock list. You can add brand, rack, GST etc. later from Stock.",
+                    color = Muted, fontSize = 12.5.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                AppField(name, { name = it }, "Part name *")
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AppField(
+                        buy, { buy = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Buy rate",
+                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ "
+                    )
+                    AppField(
+                        sell, { sell = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Sell price",
+                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ ", imeAction = ImeAction.Done
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onCreate(name.trim(), buy.toNum(), sell.toNum())
+                    onDismiss()
+                },
+                enabled = name.isNotBlank(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Orange)
+            ) { Text("Create & add", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } }
+    )
+}
