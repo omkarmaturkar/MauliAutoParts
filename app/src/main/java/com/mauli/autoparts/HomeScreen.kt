@@ -27,10 +27,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.LocalShipping
 import androidx.compose.material.icons.rounded.PointOfSale
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
@@ -76,6 +76,13 @@ fun startNewBill(vm: AppViewModel) {
     }
     if (blank >= 0) vm.current = blank else vm.newDraft()
     vm.tab(Screen.Billing)
+}
+
+/** Opens an empty estimate (budget). Stock does not change until it becomes a bill. */
+fun startEstimate(vm: AppViewModel) {
+    startNewBill(vm)
+    vm.editDraft { it.copy(estimate = true) }
+    vm.toast("Estimate • stock will not change")
 }
 
 /** "Today, 10:45 AM" / "Yesterday, 06:10 PM" / "21 Oct 2026, 11:00 AM" */
@@ -218,8 +225,8 @@ fun HomeScreen(vm: AppViewModel) {
                 AppCard(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp), padding = 6.dp) {
                     Row(Modifier.fillMaxWidth()) {
                         ActionTile(Icons.Rounded.PointOfSale, "New Bill", Orange, Modifier.weight(1f)) { startNewBill(vm) }
-                        ActionTile(Icons.Rounded.AddBox, "Add Part", Navy, Modifier.weight(1f)) { vm.open(Screen.EditPart(0)) }
-                        ActionTile(Icons.Rounded.LocalShipping, "Order List", Purple, Modifier.weight(1f), sendOrder)
+                        ActionTile(Icons.Rounded.Description, "Estimate", Purple, Modifier.weight(1f)) { startEstimate(vm) }
+                        ActionTile(Icons.Rounded.LocalShipping, "Order List", Teal, Modifier.weight(1f), sendOrder)
                         ActionTile(Icons.Rounded.AccountBalanceWallet, "Udhaar", Red, Modifier.weight(1f)) {
                             vm.billFilter = "Udhaar"
                             vm.tab(Screen.Bills)
@@ -489,10 +496,13 @@ private fun OpenBillCard(index: Int, d: Draft, onClick: () -> Unit) {
     val who = d.customer.ifBlank { vehicleLabel(d.vehicleNo) }.ifBlank { "Walk-in customer" }
     AppCard(Modifier.width(230.dp), onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(Icons.Rounded.Receipt, Orange, 36.dp)
+            IconBadge(if (d.estimate) Icons.Rounded.Description else Icons.Rounded.Receipt, if (d.estimate) Purple else Orange, 36.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text("Bill ${index + 1}", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (d.estimate) "Estimate" else "Bill ${index + 1}",
+                    color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                )
                 Text(who, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -503,13 +513,13 @@ private fun OpenBillCard(index: Int, d: Draft, onClick: () -> Unit) {
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "Continue billing →",
+            if (d.estimate) "Continue estimate →" else "Continue billing →",
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
-                .background(OrangeSoft)
+                .background(if (d.estimate) Purple.copy(alpha = 0.10f) else OrangeSoft)
                 .padding(vertical = 8.dp),
-            color = Orange, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center
+            color = if (d.estimate) Purple else Orange, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center
         )
     }
 }
