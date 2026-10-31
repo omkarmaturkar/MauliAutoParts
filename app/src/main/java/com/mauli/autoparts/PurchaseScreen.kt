@@ -65,6 +65,7 @@ import java.util.Calendar
 
 private val PurchaseFilters = listOf("All", "This Month", "Payable")
 private val VendorPayModes = listOf("Cash", "UPI", "Bank", "Credit")
+private val AllDiscountChips = listOf("5%", "10%", "12%", "15%", "20%", "Custom")
 
 /** Row of tappable suggestions (vendors etc.). */
 @Composable
@@ -170,6 +171,17 @@ fun PurchasesScreen(vm: AppViewModel) {
                 }
             }
         }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Color.White)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
+            MainButton("New purchase", Modifier.fillMaxWidth(), icon = Icons.Rounded.Add, color = Teal) {
+                vm.open(Screen.PurchaseEdit(0))
+            }
+        }
     }
 }
 
@@ -234,6 +246,7 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
     var editLine by remember { mutableStateOf<BillItem?>(null) }
     var newPartName by remember { mutableStateOf<String?>(null) }
     var askDelete by remember { mutableStateOf(false) }
+    var askAll by remember { mutableStateOf(false) }
 
     fun addLine(p: Part, rate: Double = p.buyPrice) {
         val ex = lines.find { it.partId == p.id }
@@ -242,8 +255,18 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
         } else {
             lines + BillItem(
                 id = System.nanoTime(), partId = p.id, name = p.name, partNo = p.partNo,
-                qty = 1, price = rate, buyPrice = rate, gst = p.gst
+                qty = 1, price = rate, buyPrice = rate, listPrice = rate, gst = p.gst
             )
+        }
+    }
+
+    /** Gives every item the same vendor discount %. 0 removes all discounts. */
+    fun applyAll(pct: Double) {
+        val pc = pct.coerceIn(0.0, 100.0)
+        lines = lines.map { l ->
+            val list = l.listRate
+            val net = netRate(list, pc)
+            l.copy(listPrice = list, discPct = pc, price = net, buyPrice = net)
         }
     }
 
@@ -276,6 +299,7 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
     }
 
     val sub = lines.sumOf { it.qty * it.price }
+    val saved = lines.sumOf { it.qty * (it.listRate - it.price) }.coerceAtLeast(0.0)
     val disc = discount.toNum().coerceIn(0.0, sub)
     val total = sub - disc
     val paidValue = if (paid.isBlank()) (if (mode == "Credit") 0.0 else total) else paid.toNum().coerceIn(0.0, total)
@@ -283,6 +307,7 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
     val partsById = remember(parts) { parts.associateBy { it.id } }
     val results = remember(parts, query) { pickParts(parts, query) }
     val vendors = remember(purchases, parts, vendor) { vendorList(purchases, parts, vendor) }
+    val anyDiscount = lines.any { it.discPct > 0.0 }
 
     fun save() {
         vm.savePurchase(
@@ -384,6 +409,15 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
                             color = Muted, fontSize = 13.sp
                         )
                     } else {
+                        Spacer(Modifier.height(10.dp))
+                        Text("Vendor discount on all items", color = Muted, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                        PickChips(AllDiscountChips + (if (anyDiscount) listOf("No discount") else emptyList())) { v ->
+                            when (v) {
+                                "Custom" -> askAll = true
+                                "No discount" -> applyAll(0.0)
+                                else -> applyAll(v.removeSuffix("%").toNum())
+                            }
+                        }
                         Spacer(Modifier.height(6.dp))
                         lines.forEachIndexed { i, l ->
                             if (i > 0) HorizontalDivider(color = Line)
@@ -405,7 +439,7 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
 
                 PCard("Payment to vendor", Icons.Rounded.Payment, Green) {
                     AppField(
-                        discount, { discount = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Discount (if any)",
+                        discount, { discount = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Extra discount on whole bill (if any)",
                         type = KeyboardType.Decimal, prefix = "₹ "
                     )
                     Spacer(Modifier.height(12.dp))
@@ -428,8 +462,12 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
                         Modifier.padding(top = 4.dp), color = Faint, fontSize = 12.sp
                     )
                     Spacer(Modifier.height(12.dp))
+                    if (saved > 0.009) {
+                        InfoRow("Items at list rate", rs(sub + saved))
+                        InfoRow("Item discounts", "- " + rs(saved), color = Green)
+                    }
                     InfoRow("Items total", rs(sub))
-                    if (disc > 0) InfoRow("Discount", "- " + rs(disc), color = Green)
+                    if (disc > 0) InfoRow("Extra bill discount", "- " + rs(disc), color = Green)
                     HorizontalDivider(Modifier.padding(vertical = 6.dp), color = Line)
                     InfoRow("Purchase total", rs(total), bold = true, color = Navy, size = 18)
                     InfoRow("Paid", rs(paidValue))
@@ -459,12 +497,25 @@ fun PurchaseEditScreen(vm: AppViewModel, id: Long) {
     editLine?.let { l ->
         PurchaseLineDialog(
             line = l,
-            onSave = { q, r ->
+            onSave = { q, list, pct ->
+                val net = netRate(list, pct)
                 lines = if (q <= 0) lines.filter { it.id != l.id }
-                else lines.map { if (it.id == l.id) it.copy(qty = q, price = r, buyPrice = r) else it }
+                else lines.map {
+                    if (it.id == l.id) it.copy(qty = q, listPrice = list, discPct = pct, price = net, buyPrice = net) else it
+                }
             },
             onRemove = { lines = lines.filter { it.id != l.id } },
             onDismiss = { editLine = null }
+        )
+    }
+    if (askAll) {
+        InputDialog(
+            title = "Discount on all items",
+            label = "Discount %",
+            message = "The vendor gives this % off on every part in this purchase.",
+            confirm = "Apply",
+            onConfirm = { v -> applyAll(v.toNum()) },
+            onDismiss = { askAll = false }
         )
     }
     newPartName?.let { n ->
@@ -543,6 +594,7 @@ private fun NewPartRow(name: String, onClick: () -> Unit) {
 
 @Composable
 private fun PLineRow(line: BillItem, part: Part?, onTap: () -> Unit, onMinus: () -> Unit, onPlus: () -> Unit) {
+    val off = line.discPct > 0.0 && line.listRate > line.price
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(
             Modifier
@@ -551,7 +603,17 @@ private fun PLineRow(line: BillItem, part: Part?, onTap: () -> Unit, onMinus: ()
                 .clickable(onClick = onTap)
         ) {
             Text(line.name, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("Rate ${rs(line.price)}  •  tap to change", color = Muted, fontSize = 12.5.sp)
+            Text(
+                if (off) "${rs(line.listRate)} − ${num(line.discPct)}% = ${rs(line.price)} each  •  tap to change"
+                else "Rate ${rs(line.price)}  •  tap to change",
+                color = Muted, fontSize = 12.5.sp
+            )
+            if (off) {
+                Text(
+                    "You save ${rs(line.qty * (line.listRate - line.price))}",
+                    color = Green, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                )
+            }
             if (part != null) Text("Stock now: ${part.qty} ${part.unit}", color = Faint, fontSize = 12.sp)
             Text(rs(line.qty * line.price), color = Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
@@ -561,91 +623,48 @@ private fun PLineRow(line: BillItem, part: Part?, onTap: () -> Unit, onMinus: ()
 }
 
 @Composable
-private fun PurchaseLineDialog(line: BillItem, onSave: (Int, Double) -> Unit, onRemove: () -> Unit, onDismiss: () -> Unit) {
+private fun PurchaseLineDialog(
+    line: BillItem,
+    onSave: (Int, Double, Double) -> Unit,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit
+) {
     var qty by remember { mutableStateOf(line.qty.toString()) }
-    var rate by remember { mutableStateOf(num(line.price)) }
+    var rate by remember { mutableStateOf(num(line.listRate)) }
+    var pct by remember { mutableStateOf(if (line.discPct > 0.0) num(line.discPct) else "") }
+    val q = qty.toIntOrNull() ?: 0
+    val list = rate.toNum()
+    val pc = pct.toNum().coerceIn(0.0, 100.0)
+    val net = netRate(list, pc)
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color.White,
         shape = RoundedCornerShape(24.dp),
         title = { Text(line.name, color = Ink, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     AppField(
                         qty, { qty = it.filter { c -> c.isDigit() }.take(6) }, "Quantity",
                         Modifier.weight(1f), type = KeyboardType.Number
                     )
                     AppField(
-                        rate, { rate = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Buy rate",
-                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ ", imeAction = ImeAction.Done
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                Text("Amount: ${rs((qty.toIntOrNull() ?: 0) * rate.toNum())}", color = Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    onSave(qty.toIntOrNull() ?: 0, rate.toNum())
-                    onDismiss()
-                },
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Navy)
-            ) { Text("Update", fontWeight = FontWeight.Bold) }
-        },
-        dismissButton = {
-            TextButton(onClick = {
-                onRemove()
-                onDismiss()
-            }) { Text("Remove", color = Red, fontWeight = FontWeight.SemiBold) }
-        }
-    )
-}
-
-@Composable
-private fun NewPartDialog(initial: String, onCreate: (String, Double, Double) -> Unit, onDismiss: () -> Unit) {
-    var name by remember { mutableStateOf(initial) }
-    var buy by remember { mutableStateOf("") }
-    var sell by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color.White,
-        shape = RoundedCornerShape(24.dp),
-        title = { Text("New part", color = Ink, fontWeight = FontWeight.Bold) },
-        text = {
-            Column {
-                Text(
-                    "It will be added to your stock list. You can add brand, rack, GST etc. later from Stock.",
-                    color = Muted, fontSize = 12.5.sp
-                )
-                Spacer(Modifier.height(10.dp))
-                AppField(name, { name = it }, "Part name *")
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AppField(
-                        buy, { buy = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Buy rate",
+                        rate, { rate = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Rate (before discount)",
                         Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ "
                     )
-                    AppField(
-                        sell, { sell = it.filter { c -> c.isDigit() || c == '.' }.take(10) }, "Sell price",
-                        Modifier.weight(1f), type = KeyboardType.Decimal, prefix = "₹ ", imeAction = ImeAction.Done
-                    )
                 }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    onCreate(name.trim(), buy.toNum(), sell.toNum())
-                    onDismiss()
-                },
-                enabled = name.isNotBlank(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Orange)
-            ) { Text("Create & add", fontWeight = FontWeight.Bold) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } }
-    )
-}
+                Spacer(Modifier.height(10.dp))
+                AppField(
+                    pct, { pct = it.filter { c -> c.isDigit() || c == '.' }.take(5) }, "Vendor discount % (if any)",
+                    type = KeyboardType.Decimal, suffix = "%", imeAction = ImeAction.Done
+                )
+                PickChips(listOf("5%", "10%", "15%", "20%")) { pct = it.removeSuffix("%") }
+                Spacer(Modifier.height(10.dp))
+                if (pc > 0.0 && list > 0.0) {
+                    Text(
+                        "You pay ${rs(net)} each  (list ${rs(list)})",
+                        color = Green, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                Text("Amount: ${rs(q * net)}", color = Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold)
