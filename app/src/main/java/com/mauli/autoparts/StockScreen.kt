@@ -1,6 +1,5 @@
 package com.mauli.autoparts
 
-import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -84,7 +83,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -117,15 +115,11 @@ fun StockScreen(vm: AppViewModel) {
     val parts by vm.parts.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
-    var importInfo by remember { mutableStateOf(false) }
     var stockFor by remember { mutableStateOf<Part?>(null) }
     val listState = rememberLazyListState()
     val draft = vm.draft
     val reserved = vm.reserved()
 
-    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.importCsv(uri)
-    }
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         if (uri != null) vm.exportCsv(uri)
     }
@@ -171,7 +165,7 @@ fun StockScreen(vm: AppViewModel) {
                             leadingIcon = { Icon(Icons.Rounded.FileUpload, null, tint = Green) },
                             onClick = {
                                 menu = false
-                                importInfo = true
+                                vm.open(ImportPage)
                             }
                         )
                         DropdownMenuItem(
@@ -208,10 +202,12 @@ fun StockScreen(vm: AppViewModel) {
                 ) {
                     EmptyState(
                         Icons.Rounded.Category, "No parts yet",
-                        "Add parts one by one, or import your full stock from an Excel sheet in one go.",
-                        action = "Add first part"
-                    ) { vm.open(Screen.EditPart(0)) }
-                    LightButton("Import from Excel", icon = Icons.Rounded.FileUpload, color = Green) { importInfo = true }
+                        "Bring your whole parts list in from an Excel sheet in one go, or add parts one by one.",
+                        action = "Import from Excel"
+                    ) { vm.open(ImportPage) }
+                    LightButton("Add first part by hand", icon = Icons.Rounded.Add, color = Navy) {
+                        vm.open(Screen.EditPart(0))
+                    }
                 }
                 shown.isEmpty() -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     EmptyState(
@@ -252,19 +248,6 @@ fun StockScreen(vm: AppViewModel) {
     }
 
     stockFor?.let { p -> AddStockDialog(vm, p) { stockFor = null } }
-    if (importInfo) {
-        ImportDialog(
-            onSample = {
-                importInfo = false
-                shareSample(context)
-            },
-            onChoose = {
-                importInfo = false
-                importer.launch(arrayOf("text/*", "application/csv", "application/vnd.ms-excel"))
-            },
-            onDismiss = { importInfo = false }
-        )
-    }
 }
 
 /**
@@ -481,48 +464,6 @@ private fun BillBar(vm: AppViewModel, d: Draft, modifier: Modifier) {
     }
 }
 
-@Composable
-private fun ImportDialog(onSample: () -> Unit, onChoose: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color.White,
-        shape = RoundedCornerShape(24.dp),
-        title = { Text("Import stock from Excel", color = Ink, fontWeight = FontWeight.Bold) },
-        text = {
-            Column {
-                Text("1.  Keep your Excel columns in this order:", color = Ink, fontSize = 14.sp)
-                Text(
-                    CSV_HEADER.joinToString(",  "),
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(NavySoft)
-                        .padding(10.dp),
-                    color = Navy, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
-                )
-                Text("2.  In Excel: File → Save As → CSV", color = Ink, fontSize = 14.sp)
-                Spacer(Modifier.height(6.dp))
-                Text("3.  Tap Choose file and pick that CSV", color = Ink, fontSize = 14.sp)
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "Parts with the same Part No (or same name) get updated, not repeated. " +
-                        "Easiest way: get the sample file, fill it, then import.",
-                    color = Muted, fontSize = 12.5.sp
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = onChoose, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Green)) {
-                Text("Choose file", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onSample) { Text("Get sample file", color = Navy, fontWeight = FontWeight.SemiBold) }
-        }
-    )
-}
-
 private fun filterParts(parts: List<Part>, query: String, filter: String): List<Part> {
     val base = when (filter) {
         "All" -> parts
@@ -535,27 +476,5 @@ private fun filterParts(parts: List<Part>, query: String, filter: String): List<
     return base.filter { p ->
         val hay = "${p.name} ${p.partNo} ${p.brand} ${p.vehicle} ${p.category} ${p.rack} ${p.notes}".lowercase()
         words.all { it in hay }
-    }
-}
-
-/** Makes a sample Excel (CSV) file and opens the share menu (save it / send to WhatsApp / open in Excel). */
-private fun shareSample(context: Context) {
-    try {
-        val dir = File(context.cacheDir, "shared").apply { mkdirs() }
-        val file = File(dir, "Mauli_Stock_Sample.csv")
-        val rows = listOf(
-            CSV_HEADER,
-            listOf(
-                "Indicator Assembly Front", "IND-101", "Lights", "Lumax", "Splendor Plus", "A2", "pcs",
-                "120", "180", "200", "10", "3", "18", "8512", "Sai Agencies", ""
-            ),
-            listOf(
-                "Brake Shoe Set", "BS-220", "Brake", "Bosch", "Activa 5G", "B1", "set",
-                "160", "240", "260", "6", "2", "28", "8708", "", ""
-            )
-        )
-        file.writeText("\uFEFF" + rows.joinToString("\r\n") { csvLine(it) } + "\r\n")
-        Printer.shareFile(context, file, "text/csv", "Save or send sample file")
-    } catch (e: Exception) {
     }
 }
